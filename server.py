@@ -6,6 +6,7 @@ from werkzeug.utils import secure_filename
 import logging
 import requests
 import io
+import tempfile
 
 app = Flask(__name__)
 
@@ -74,7 +75,7 @@ def text_to_speech():
         return jsonify({"error": "Please provide both text and filename"}), 400
 
     try:
-        audio_content = generate_audio(text, filename, model)
+        audio_content = generate_audio(text, model)
         file_url = upload_to_blob_storage(filename, audio_content)
 
         return jsonify({"file_url": file_url}), 201
@@ -82,20 +83,24 @@ def text_to_speech():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-def generate_audio(text, filename, model):
+def generate_audio(text, model):
     async def run():
         communicate = edge_tts.Communicate(text, model)
-        await communicate.save(filename)
+        with tempfile.NamedTemporaryFile(delete=False) as temp_audio_file:
+            temp_audio_file_name = temp_audio_file.name
+            await communicate.save(temp_audio_file_name)
+        
+        with open(temp_audio_file_name, "rb") as audio_file:
+            audio_content = audio_file.read()
+
+        os.remove(temp_audio_file_name)
+        return audio_content
 
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
-    loop.run_until_complete(run())
+    audio_content = loop.run_until_complete(run())
     loop.close()
 
-    with open(filename, "rb") as audio_file:
-        audio_content = audio_file.read()
-
-    os.remove(filename)
     return audio_content
 
 if __name__ == '__main__':
