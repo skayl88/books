@@ -35,7 +35,7 @@ def upload_to_blob_storage(filename, file_content):
         return response.json()["url"]
     else:
         logger.error(f"Failed to upload file to blob storage: {response.text}")
-        raise Exception("Failed to upload file to blob storage")
+        raise Exception(f"Failed to upload file to blob storage: {response.status_code} - {response.text}")
 
 @app.route('/', methods=['GET'])
 def home():
