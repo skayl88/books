@@ -5,6 +5,7 @@ import asyncio
 from werkzeug.utils import secure_filename
 import logging
 import requests
+import io
 
 app = Flask(__name__)
 
@@ -94,20 +95,13 @@ def text_to_speech():
         return jsonify({"error": "Please provide both text and filename"}), 400
 
     try:
-        audio_path = generate_audio(text, filename, model)
-        logger.info(f"Audio generated: {audio_path}")
-        print(f"Audio generated: {audio_path}")
+        audio_content = generate_audio(text, filename, model)
+        logger.info(f"Audio generated: {filename}")
+        print(f"Audio generated: {filename}")
 
-        with open(audio_path, "rb") as audio_file:
-            file_content = audio_file.read()
-            file_url = upload_to_blob_storage(filename, file_content)
-
+        file_url = upload_to_blob_storage(filename, audio_content)
         logger.info(f"Audio file uploaded to Vercel Blob Storage: {filename}")
         print(f"Audio file uploaded to Vercel Blob Storage: {filename}")
-
-        os.remove(audio_path)
-        logger.info(f"Local audio file removed: {audio_path}")
-        print(f"Local audio file removed: {audio_path}")
 
         return jsonify({"file_url": file_url}), 201
 
@@ -119,18 +113,22 @@ def text_to_speech():
 def generate_audio(text, filename, model):
     logger.info(f"Generating audio for text: {text} with model: {model}")
     print(f"Generating audio for text: {text} with model: {model}")
+    
     async def run():
         communicate = edge_tts.Communicate(text, model)
-        await communicate.save(filename)
+        memory_file = io.BytesIO()
+        await communicate.save(memory_file)
+        memory_file.seek(0)
+        return memory_file
 
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
-    loop.run_until_complete(run())
+    audio_content = loop.run_until_complete(run())
     loop.close()
 
-    logger.info(f"Audio file saved as: {filename}")
-    print(f"Audio file saved as: {filename}")
-    return filename
+    logger.info(f"Audio file saved in memory: {filename}")
+    print(f"Audio file saved in memory: {filename}")
+    return audio_content
 
 if __name__ == '__main__':
     logger.info("Starting Flask server")
