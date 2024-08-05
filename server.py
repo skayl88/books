@@ -1,11 +1,10 @@
 from flask import Flask, request, jsonify
-import firebase_admin
-from firebase_admin import credentials, storage
 import edge_tts
 import os
 import asyncio
 from werkzeug.utils import secure_filename
 import logging
+import requests
 
 app = Flask(__name__)
 
@@ -14,18 +13,27 @@ logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 app.config['DEBUG'] = True
 
-# Настройка Firebase
-cred = credentials.Certificate('serviceAccountKey.json')  # Укажите правильный путь к вашему файлу serviceAccountKey.json
-firebase_admin.initialize_app(cred, {
-    'storageBucket': 'books-cca25.appspot.com'  # Замените на ваше значение storageBucket
-})
-bucket = storage.bucket()
+# Настройка Vercel Blob Storage
+BLOB_READ_WRITE_TOKEN = os.getenv('BLOB_READ_WRITE_TOKEN')
+BLOB_STORAGE_URL = "https://books-blob.vercel.app"
 
 # Настройки приложения
 ALLOWED_EXTENSIONS = {'txt', 'pdf', 'png', 'jpg', 'jpeg', 'gif', 'mp3'}
 
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+
+def upload_to_blob_storage(filename, file_content):
+    headers = {
+        "Authorization": f"Bearer {BLOB_READ_WRITE_TOKEN}",
+        "Content-Type": "application/octet-stream"
+    }
+    response = requests.post(f"{BLOB_STORAGE_URL}/{filename}", headers=headers, data=file_content)
+    if response.status_code == 200:
+        return response.json()["url"]
+    else:
+        logger.error(f"Failed to upload file to blob storage: {response.text}")
+        raise Exception("Failed to upload file to blob storage")
 
 @app.route('/', methods=['GET'])
 def home():
@@ -53,12 +61,14 @@ def upload_file():
         filename = secure_filename(file.filename)
         logger.info(f"File allowed: {filename}")
         print(f"File allowed: {filename}")
-        blob = bucket.blob(filename)
-        blob.upload_from_file(file)
-        blob.make_public()
-        logger.info(f"File uploaded to Firebase Storage: {filename}")
-        print(f"File uploaded to Firebase Storage: {filename}")
-        return jsonify({"file_url": blob.public_url}), 201
+        
+        file_content = file.read()
+        file_url = upload_to_blob_storage(filename, file_content)
+
+        logger.info(f"File uploaded to Vercel Blob Storage: {filename}")
+        print(f"File uploaded to Vercel Blob Storage: {filename}")
+
+        return jsonify({"file_url": file_url}), 201
 
     logger.warning("File type not allowed")
     print("File type not allowed")
@@ -88,16 +98,18 @@ def text_to_speech():
         logger.info(f"Audio generated: {audio_path}")
         print(f"Audio generated: {audio_path}")
 
-        blob = bucket.blob(filename)
-        blob.upload_from_filename(audio_path)
-        blob.make_public()
-        logger.info(f"Audio file uploaded to Firebase Storage: {filename}")
-        print(f"Audio file uploaded to Firebase Storage: {filename}")
+        with open(audio_path, "rb") as audio_file:
+            file_content = audio_file.read()
+            file_url = upload_to_blob_storage(filename, file_content)
+
+        logger.info(f"Audio file uploaded to Vercel Blob Storage: {filename}")
+        print(f"Audio file uploaded to Vercel Blob Storage: {filename}")
+
         os.remove(audio_path)
         logger.info(f"Local audio file removed: {audio_path}")
         print(f"Local audio file removed: {audio_path}")
 
-        return jsonify({"file_url": blob.public_url}), 201
+        return jsonify({"file_url": file_url}), 201
 
     except Exception as e:
         logger.error(f"Error during text-to-speech processing: {e}")
