@@ -74,7 +74,7 @@ def text_to_speech():
         return jsonify({"error": "Please provide both text and filename"}), 400
 
     try:
-        audio_content = generate_audio(text, model)
+        audio_content = generate_audio(text, filename, model)
         file_url = upload_to_blob_storage(filename, audio_content)
 
         return jsonify({"file_url": file_url}), 201
@@ -82,19 +82,20 @@ def text_to_speech():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-def generate_audio(text, model):
+def generate_audio(text, filename, model):
     async def run():
         communicate = edge_tts.Communicate(text, model)
-        memory_file = io.BytesIO()
-        await communicate.save(memory_file)
-        memory_file.seek(0)
-        return memory_file
+        await communicate.save(filename)
 
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
-    audio_content = loop.run_until_complete(run()).getvalue()
+    loop.run_until_complete(run())
     loop.close()
 
+    with open(filename, "rb") as audio_file:
+        audio_content = audio_file.read()
+
+    os.remove(filename)
     return audio_content
 
 if __name__ == '__main__':
