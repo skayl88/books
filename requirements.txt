@@ -1,4 +1,4 @@
 Flask[async]
+requests
 edge-tts
 gunicorn
-redis

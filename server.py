@@ -6,7 +6,6 @@ from werkzeug.utils import secure_filename
 import logging
 import requests
 import tempfile
-import redis
 
 app = Flask(__name__)
 
@@ -15,16 +14,12 @@ logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 app.config['DEBUG'] = True
 
-# Настройка Upstash Redis
-KV_URL = os.getenv('KV_URL')
-KV_REST_API_URL = os.getenv('KV_REST_API_URL')
-KV_REST_API_TOKEN = os.getenv('KV_REST_API_TOKEN')
+# Настройка Vercel Blob Storage
+BLOB_READ_WRITE_TOKEN = os.getenv('BLOB_READ_WRITE_TOKEN')
+BLOB_STORAGE_URL = "https://api.vercel.com/v2/books-blob"
 
-if not KV_URL or not KV_REST_API_URL or not KV_REST_API_TOKEN:
-    logger.error("KV_URL, KV_REST_API_URL, and KV_REST_API_TOKEN environment variables are not set")
-    raise ValueError("KV_URL, KV_REST_API_URL, and KV_REST_API_TOKEN environment variables are not set")
-
-redis_client = redis.from_url(KV_URL)
+if not BLOB_READ_WRITE_TOKEN:
+    raise ValueError("BLOB_READ_WRITE_TOKEN environment variable is not set")
 
 # Настройки приложения
 ALLOWED_EXTENSIONS = {'txt', 'pdf', 'png', 'jpg', 'jpeg', 'gif', 'mp3'}
@@ -32,17 +27,17 @@ ALLOWED_EXTENSIONS = {'txt', 'pdf', 'png', 'jpg', 'jpeg', 'gif', 'mp3'}
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
-def upload_to_upstash(filename, file_content):
+def upload_to_vercel_blob(filename, file_content):
     headers = {
-        "Authorization": f"Bearer {KV_REST_API_TOKEN}",
+        "Authorization": f"Bearer {BLOB_READ_WRITE_TOKEN}",
         "Content-Type": "application/octet-stream"
     }
-    response = requests.post(f"{KV_REST_API_URL}/set/{filename}", headers=headers, data=file_content)
+    response = requests.post(f"{BLOB_STORAGE_URL}/{filename}", headers=headers, data=file_content)
     if response.status_code == 200:
-        return f"{KV_REST_API_URL}/get/{filename}"
+        return response.json()["url"]
     else:
-        logger.error(f"Failed to upload file to Upstash: {response.text}")
-        raise Exception(f"Failed to upload file to Upstash: {response.status_code} - {response.text}")
+        logger.error(f"Failed to upload file to Vercel Blob Storage: {response.text}")
+        raise Exception(f"Failed to upload file to Vercel Blob Storage: {response.status_code} - {response.text}")
 
 @app.route('/', methods=['GET'])
 def home():
@@ -62,7 +57,7 @@ def upload_file():
         filename = secure_filename(file.filename)
         
         file_content = file.read()
-        file_url = upload_to_upstash(filename, file_content)
+        file_url = upload_to_vercel_blob(filename, file_content)
 
         return jsonify({"file_url": file_url}), 201
 
@@ -83,7 +78,7 @@ def text_to_speech():
 
     try:
         audio_content = generate_audio(text, model)
-        file_url = upload_to_upstash(filename, audio_content)
+        file_url = upload_to_vercel_blob(filename, audio_content)
 
         return jsonify({"file_url": file_url}), 201
 
