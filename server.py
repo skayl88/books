@@ -6,6 +6,7 @@ from werkzeug.utils import secure_filename
 import logging
 import requests
 import tempfile
+import redis
 
 app = Flask(__name__)
 
@@ -14,12 +15,16 @@ logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 app.config['DEBUG'] = True
 
-# Настройка Upstash
-UPSTASH_URL = os.getenv('UPSTASH_URL')
-UPSTASH_TOKEN = os.getenv('UPSTASH_TOKEN')
+# Настройка Upstash Redis
+KV_URL = os.getenv('KV_URL')
+KV_REST_API_URL = os.getenv('KV_REST_API_URL')
+KV_REST_API_TOKEN = os.getenv('KV_REST_API_TOKEN')
 
-if not UPSTASH_URL or not UPSTASH_TOKEN:
-    raise ValueError("UPSTASH_URL and UPSTASH_TOKEN environment variables are not set")
+if not KV_URL or not KV_REST_API_URL or not KV_REST_API_TOKEN:
+    logger.error("KV_URL, KV_REST_API_URL, and KV_REST_API_TOKEN environment variables are not set")
+    raise ValueError("KV_URL, KV_REST_API_URL, and KV_REST_API_TOKEN environment variables are not set")
+
+redis_client = redis.from_url(KV_URL)
 
 # Настройки приложения
 ALLOWED_EXTENSIONS = {'txt', 'pdf', 'png', 'jpg', 'jpeg', 'gif', 'mp3'}
@@ -29,12 +34,12 @@ def allowed_file(filename):
 
 def upload_to_upstash(filename, file_content):
     headers = {
-        "Authorization": f"Bearer {UPSTASH_TOKEN}",
+        "Authorization": f"Bearer {KV_REST_API_TOKEN}",
         "Content-Type": "application/octet-stream"
     }
-    response = requests.post(f"{UPSTASH_URL}/set/{filename}", headers=headers, data=file_content)
+    response = requests.post(f"{KV_REST_API_URL}/set/{filename}", headers=headers, data=file_content)
     if response.status_code == 200:
-        return f"{UPSTASH_URL}/{filename}"
+        return f"{KV_REST_API_URL}/get/{filename}"
     else:
         logger.error(f"Failed to upload file to Upstash: {response.text}")
         raise Exception(f"Failed to upload file to Upstash: {response.status_code} - {response.text}")
@@ -83,6 +88,7 @@ def text_to_speech():
         return jsonify({"file_url": file_url}), 201
 
     except Exception as e:
+        logger.error(f"Error in text-to-speech processing: {e}")
         return jsonify({"error": str(e)}), 500
 
 def generate_audio(text, model):

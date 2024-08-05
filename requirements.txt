@@ -1,4 +1,4 @@
 Flask[async]
 edge-tts
 gunicorn
-firebase-admin
+redis
