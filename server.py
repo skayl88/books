@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify, send_file
+from flask import Flask, request, jsonify, send_file, url_for
 import edge_tts
 import os
 import asyncio
@@ -28,15 +28,15 @@ def upload_file():
 
     if file and allowed_file(file.filename):
         filename = secure_filename(file.filename)
-        with tempfile.NamedTemporaryFile(delete=False) as tmp_file:
+        with tempfile.NamedTemporaryFile(delete=False, dir='uploads') as tmp_file:
             file.save(tmp_file.name)
-            return jsonify({"file_url": tmp_file.name}), 201
+            return jsonify({"file_url": url_for('uploaded_file', filename=os.path.basename(tmp_file.name), _external=True)}), 201
 
     return jsonify({"error": "File type not allowed"}), 400
 
 @app.route('/uploads/<filename>', methods=['GET'])
 def uploaded_file(filename):
-    return send_file(filename)
+    return send_file(os.path.join('uploads', filename))
 
 @app.route('/text-to-speech', methods=['POST', 'GET'])
 def text_to_speech():
@@ -57,16 +57,18 @@ def text_to_speech():
         audio_path = loop.run_until_complete(generate_audio(text, filename, model))
         loop.close()
 
-        return send_file(audio_path, as_attachment=True, download_name=f'{filename}.mp3')
+        return jsonify({"file_url": url_for('uploaded_file', filename=os.path.basename(audio_path), _external=True)}), 201
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 async def generate_audio(text, filename, model):
     communicate = edge_tts.Communicate(text, model)
-    with tempfile.NamedTemporaryFile(delete=False, suffix='.mp3') as tmp_file:
+    with tempfile.NamedTemporaryFile(delete=False, suffix='.mp3', dir='uploads') as tmp_file:
         await communicate.save(tmp_file.name)
     return tmp_file.name
 
 if __name__ == '__main__':
+    if not os.path.exists('uploads'):
+        os.makedirs('uploads')
     app.run(host='0.0.0.0', port=5000)
