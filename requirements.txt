@@ -1,0 +1,3 @@
+Flask[async]
+edge-tts
+gunicorn
