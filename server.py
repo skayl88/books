@@ -32,7 +32,10 @@ def upload_to_vercel_blob(filename, file_content):
         "Authorization": f"Bearer {BLOB_READ_WRITE_TOKEN}",
         "Content-Type": "application/octet-stream"
     }
-    response = requests.post(f"{BLOB_STORAGE_URL}/{filename}", headers=headers, data=file_content)
+    files = {
+        'file': (filename, file_content)
+    }
+    response = requests.post(BLOB_STORAGE_URL, headers=headers, files=files)
     if response.status_code == 200:
         return response.json()["url"]
     else:
