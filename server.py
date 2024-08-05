@@ -17,7 +17,10 @@ app.config['DEBUG'] = True
 
 # Настройка Vercel Blob Storage
 BLOB_READ_WRITE_TOKEN = os.getenv('BLOB_READ_WRITE_TOKEN')
-BLOB_STORAGE_URL = "https://books-blob.vercel.app"
+BLOB_STORAGE_URL = "https://vercel.blob.vercel-storage.com/v1/upload"
+
+if not BLOB_READ_WRITE_TOKEN:
+    raise ValueError("BLOB_READ_WRITE_TOKEN environment variable is not set")
 
 # Настройки приложения
 ALLOWED_EXTENSIONS = {'txt', 'pdf', 'png', 'jpg', 'jpeg', 'gif', 'mp3'}
