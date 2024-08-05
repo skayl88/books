@@ -16,7 +16,7 @@ app.config['DEBUG'] = True
 
 # Настройка Vercel Blob Storage
 BLOB_READ_WRITE_TOKEN = os.getenv('BLOB_READ_WRITE_TOKEN')
-BLOB_STORAGE_URL = "https://api.vercel.com/v2/books-blob"
+BLOB_STORAGE_URL = "https://cmu8v3vhqan14esy.public.blob.vercel-storage.com"
 
 if not BLOB_READ_WRITE_TOKEN:
     raise ValueError("BLOB_READ_WRITE_TOKEN environment variable is not set")
