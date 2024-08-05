@@ -29,7 +29,6 @@ def allowed_file(filename):
 
 def upload_to_vercel_blob(filename, file_content):
     headers = {
-        "Authorization": f"Bearer {BLOB_READ_WRITE_TOKEN}",
         "Content-Type": "application/octet-stream"
     }
     files = {
