@@ -5,7 +5,6 @@ import asyncio
 from werkzeug.utils import secure_filename
 import logging
 import requests
-import io
 import tempfile
 
 app = Flask(__name__)
@@ -15,12 +14,12 @@ logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 app.config['DEBUG'] = True
 
-# Настройка Vercel Blob Storage
-BLOB_READ_WRITE_TOKEN = os.getenv('BLOB_READ_WRITE_TOKEN')
-BLOB_STORAGE_URL = "https://vercel.blob.vercel-storage.com/v1/upload"
+# Настройка Upstash
+UPSTASH_URL = os.getenv('UPSTASH_URL')
+UPSTASH_TOKEN = os.getenv('UPSTASH_TOKEN')
 
-if not BLOB_READ_WRITE_TOKEN:
-    raise ValueError("BLOB_READ_WRITE_TOKEN environment variable is not set")
+if not UPSTASH_URL or not UPSTASH_TOKEN:
+    raise ValueError("UPSTASH_URL and UPSTASH_TOKEN environment variables are not set")
 
 # Настройки приложения
 ALLOWED_EXTENSIONS = {'txt', 'pdf', 'png', 'jpg', 'jpeg', 'gif', 'mp3'}
@@ -28,17 +27,17 @@ ALLOWED_EXTENSIONS = {'txt', 'pdf', 'png', 'jpg', 'jpeg', 'gif', 'mp3'}
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
-def upload_to_blob_storage(filename, file_content):
+def upload_to_upstash(filename, file_content):
     headers = {
-        "Authorization": f"Bearer {BLOB_READ_WRITE_TOKEN}",
+        "Authorization": f"Bearer {UPSTASH_TOKEN}",
         "Content-Type": "application/octet-stream"
     }
-    response = requests.post(f"{BLOB_STORAGE_URL}/{filename}", headers=headers, data=file_content)
+    response = requests.post(f"{UPSTASH_URL}/set/{filename}", headers=headers, data=file_content)
     if response.status_code == 200:
-        return response.json()["url"]
+        return f"{UPSTASH_URL}/{filename}"
     else:
-        logger.error(f"Failed to upload file to blob storage: {response.text}")
-        raise Exception(f"Failed to upload file to blob storage: {response.status_code} - {response.text}")
+        logger.error(f"Failed to upload file to Upstash: {response.text}")
+        raise Exception(f"Failed to upload file to Upstash: {response.status_code} - {response.text}")
 
 @app.route('/', methods=['GET'])
 def home():
@@ -58,7 +57,7 @@ def upload_file():
         filename = secure_filename(file.filename)
         
         file_content = file.read()
-        file_url = upload_to_blob_storage(filename, file_content)
+        file_url = upload_to_upstash(filename, file_content)
 
         return jsonify({"file_url": file_url}), 201
 
@@ -79,7 +78,7 @@ def text_to_speech():
 
     try:
         audio_content = generate_audio(text, model)
-        file_url = upload_to_blob_storage(filename, audio_content)
+        file_url = upload_to_upstash(filename, audio_content)
 
         return jsonify({"file_url": file_url}), 201
 
