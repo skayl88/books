@@ -1,20 +1,22 @@
-from flask import Flask, request, jsonify, send_from_directory, url_for
+from flask import Flask, request, jsonify, url_for
+import firebase_admin
+from firebase_admin import credentials, storage
 import edge_tts
 import os
 import asyncio
-import tempfile
 from werkzeug.utils import secure_filename
 
 app = Flask(__name__)
 
-# Настройки
-UPLOAD_FOLDER = 'uploads'
+# Настройка Firebase
+cred = credentials.Certificate('path/to/serviceAccountKey.json')  # Укажите путь к вашему файлу serviceAccountKey.json
+firebase_admin.initialize_app(cred, {
+    'storageBucket': 'books-cca25.appspot.com'  # Замените на ваше значение storageBucket
+})
+bucket = storage.bucket()
+
+# Настройки приложения
 ALLOWED_EXTENSIONS = {'txt', 'pdf', 'png', 'jpg', 'jpeg', 'gif', 'mp3'}
-
-app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
-
-if not os.path.exists(UPLOAD_FOLDER):
-    os.makedirs(UPLOAD_FOLDER)
 
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
@@ -35,15 +37,12 @@ def upload_file():
 
     if file and allowed_file(file.filename):
         filename = secure_filename(file.filename)
-        file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
-        file.save(file_path)
-        return jsonify({"file_url": url_for('uploaded_file', filename=filename, _external=True)}), 201
+        blob = bucket.blob(filename)
+        blob.upload_from_file(file, content_type=file.content_type)
+        blob.make_public()
+        return jsonify({"file_url": blob.public_url}), 201
 
     return jsonify({"error": "File type not allowed"}), 400
-
-@app.route('/uploads/<filename>', methods=['GET'])
-def uploaded_file(filename):
-    return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
 
 @app.route('/text-to-speech', methods=['POST', 'GET'])
 def text_to_speech():
@@ -53,27 +52,35 @@ def text_to_speech():
     data = request.json
     text = data.get('text')
     filename = secure_filename(data.get('filename') + '.mp3')
-    model = data.get('model', 'en-US-GuyNeural')  # используем модель по умолчанию, если не указана
+    model = data.get('model', 'en-US-GuyNeural')
 
     if not text or not filename:
         return jsonify({"error": "Please provide both text and filename"}), 400
 
     try:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        audio_path = loop.run_until_complete(generate_audio(text, filename, model))
-        loop.close()
+        audio_path = generate_audio(text, filename, model)
 
-        return jsonify({"file_url": url_for('uploaded_file', filename=filename, _external=True)}), 201
+        blob = bucket.blob(filename)
+        blob.upload_from_filename(audio_path)
+        blob.make_public()
+        os.remove(audio_path)
+
+        return jsonify({"file_url": blob.public_url}), 201
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-async def generate_audio(text, filename, model):
-    communicate = edge_tts.Communicate(text, model)
-    file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
-    await communicate.save(file_path)
-    return file_path
+def generate_audio(text, filename, model):
+    async def run():
+        communicate = edge_tts.Communicate(text, model)
+        await communicate.save(filename)
+
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.run_until_complete(run())
+    loop.close()
+
+    return filename
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
