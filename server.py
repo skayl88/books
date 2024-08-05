@@ -38,82 +38,51 @@ def upload_to_blob_storage(filename, file_content):
 
 @app.route('/', methods=['GET'])
 def home():
-    logger.info("Home route accessed")
-    print("Home route accessed")
     return jsonify({"status": "Server is running"}), 200
 
 @app.route('/upload', methods=['POST'])
 def upload_file():
-    logger.info("Upload route accessed")
-    print("Upload route accessed")
     if 'file' not in request.files:
-        logger.warning("No file part in the request")
-        print("No file part in the request")
         return jsonify({"error": "No file part"}), 400
 
     file = request.files['file']
 
     if file.filename == '':
-        logger.warning("No selected file")
-        print("No selected file")
         return jsonify({"error": "No selected file"}), 400
 
     if file and allowed_file(file.filename):
         filename = secure_filename(file.filename)
-        logger.info(f"File allowed: {filename}")
-        print(f"File allowed: {filename}")
         
         file_content = file.read()
         file_url = upload_to_blob_storage(filename, file_content)
 
-        logger.info(f"File uploaded to Vercel Blob Storage: {filename}")
-        print(f"File uploaded to Vercel Blob Storage: {filename}")
-
         return jsonify({"file_url": file_url}), 201
 
-    logger.warning("File type not allowed")
-    print("File type not allowed")
     return jsonify({"error": "File type not allowed"}), 400
 
 @app.route('/text-to-speech', methods=['POST', 'GET'])
 def text_to_speech():
     if request.method == 'GET':
-        logger.info("Text-to-Speech GET route accessed")
-        print("Text-to-Speech GET route accessed")
         return jsonify({"status": "Text-to-Speech endpoint is ready"}), 200
 
-    logger.info("Text-to-Speech POST route accessed")
-    print("Text-to-Speech POST route accessed")
     data = request.json
     text = data.get('text')
     filename = secure_filename(data.get('filename') + '.mp3')
     model = data.get('model', 'en-US-GuyNeural')
 
     if not text or not filename:
-        logger.warning("Missing text or filename in the request")
-        print("Missing text or filename in the request")
         return jsonify({"error": "Please provide both text and filename"}), 400
 
     try:
-        audio_content = generate_audio(text, filename, model)
-        logger.info(f"Audio generated: {filename}")
-        print(f"Audio generated: {filename}")
-
+        audio_content = generate_audio(text, model)
         file_url = upload_to_blob_storage(filename, audio_content)
-        logger.info(f"Audio file uploaded to Vercel Blob Storage: {filename}")
-        print(f"Audio file uploaded to Vercel Blob Storage: {filename}")
 
         return jsonify({"file_url": file_url}), 201
 
     except Exception as e:
-        logger.error(f"Error during text-to-speech processing: {e}")
-        print(f"Error during text-to-speech processing: {e}")
         return jsonify({"error": str(e)}), 500
 
-def generate_audio(text, filename, model):
-    logger.info(f"Generating audio for text: {text} with model: {model}")
-    print(f"Generating audio for text: {text} with model: {model}")
-    
+def generate_audio(text, model):
     async def run():
         communicate = edge_tts.Communicate(text, model)
         memory_file = io.BytesIO()
@@ -123,14 +92,10 @@ def generate_audio(text, filename, model):
 
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
-    audio_content = loop.run_until_complete(run())
+    audio_content = loop.run_until_complete(run()).getvalue()
     loop.close()
 
-    logger.info(f"Audio file saved in memory: {filename}")
-    print(f"Audio file saved in memory: {filename}")
     return audio_content
 
 if __name__ == '__main__':
-    logger.info("Starting Flask server")
-    print("Starting Flask server")
     app.run(host='0.0.0.0', port=5000)
