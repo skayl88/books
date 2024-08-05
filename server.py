@@ -1,12 +1,19 @@
-from flask import Flask, request, jsonify, url_for, send_file
+from flask import Flask, request, jsonify, url_for
 import edge_tts
 import os
 import asyncio
 
 app = Flask(__name__)
 
-@app.route('/text-to-speech', methods=['POST'])
+@app.route('/', methods=['GET'])
+def home():
+    return jsonify({"status": "Server is running"}), 200
+
+@app.route('/text-to-speech', methods=['POST', 'GET'])
 def text_to_speech():
+    if request.method == 'GET':
+        return jsonify({"status": "Text-to-Speech endpoint is ready"}), 200
+
     data = request.json
     text = data.get('text')
     filename = data.get('filename')
