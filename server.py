@@ -184,6 +184,7 @@ async def book2(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 def telegram_webhook():
     logger.debug("Received data from Telegram webhook")
     try:
+        logger.debug(f"Request data: {request.data}")
         data = request.get_json(force=True)
         if not data:
             logger.error("No data received")
