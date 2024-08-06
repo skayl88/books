@@ -183,9 +183,18 @@ async def book2(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 @app.route('/telegram', methods=['POST'])
 def telegram_webhook():
     logger.debug("Received data from Telegram webhook")
-    data = request.get_json(force=True)
-    application.update_queue.put(Update.de_json(data, application.bot))
-    return "ok", 200
+    try:
+        data = request.get_json(force=True)
+        if not data:
+            logger.error("No data received")
+            return jsonify({"error": "No data received"}), 400
+        
+        logger.debug(f"Data received: {data}")
+        application.update_queue.put(Update.de_json(data, application.bot))
+        return "ok", 200
+    except Exception as e:
+        logger.error(f"Error processing Telegram webhook: {e}")
+        return jsonify({"error": str(e)}), 500
 
 def main():
     application.add_handler(CommandHandler("start", start))
