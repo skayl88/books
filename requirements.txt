@@ -8,8 +8,4 @@ psycopg2-binary
 python-dotenv
 edge-tts
 werkzeug
-quart
 flask_sqlalchemy
-quart_sqlalchemy
- databases
-  asyncpg
