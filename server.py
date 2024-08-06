@@ -185,10 +185,10 @@ def telegram_webhook():
     logger.debug("Received data from Telegram webhook")
     try:
         logger.debug(f"Request data: {request.data}")
-        data = request.get_json(force=True)
+        data = request.get_json(silent=True)
         if not data:
-            logger.error("No data received")
-            return jsonify({"error": "No data received"}), 400
+            logger.error("No data received or failed to decode JSON")
+            return jsonify({"error": "No data received or failed to decode JSON"}), 400
         
         logger.debug(f"Data received: {data}")
         asyncio.run(application.update_queue.put(Update.de_json(data, application.bot)))
