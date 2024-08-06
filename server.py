@@ -8,12 +8,8 @@ import requests
 import tempfile
 from flask_sqlalchemy import SQLAlchemy
 from datetime import datetime
-from dotenv import load_dotenv
 from telegram import Update, Bot
 from telegram.ext import Updater, CommandHandler, CallbackContext
-
-# Загрузка переменных окружения из .env файла
-load_dotenv()
 
 app = Flask(__name__)
 
@@ -23,14 +19,10 @@ logger = logging.getLogger(__name__)
 app.config['DEBUG'] = True
 
 # Настройка Vercel Blob Storage
-BLOB_READ_WRITE_TOKEN = os.getenv('BLOB_READ_WRITE_TOKEN')
+BLOB_READ_WRITE_TOKEN = 'vercel_blob_rw_cMu8v3vHQAN14ESY_SBU40vPpLMnSRWD0sHHA9Ug212BCGO'
 
 # Настройка базы данных
-DATABASE_URI = os.getenv('SQLALCHEMY_DATABASE_URI')
-if not DATABASE_URI:
-    raise RuntimeError("SQLALCHEMY_DATABASE_URI is not set in environment variables")
-
-app.config['SQLALCHEMY_DATABASE_URI'] = DATABASE_URI
+app.config['SQLALCHEMY_DATABASE_URI'] = 'postgresql+psycopg2://default:DR9xJNrve5HF@ep-little-poetry-a2krqpco.eu-central-1.aws.neon.tech:5432/verceldb?sslmode=require'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 try:
@@ -40,10 +32,7 @@ except Exception as e:
     raise
 
 # Настройка Telegram Bot
-TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
-if not TELEGRAM_TOKEN:
-    raise RuntimeError("TELEGRAM_TOKEN is not set in environment variables")
-
+TELEGRAM_TOKEN = '7132952339:AAEKw5bcSKZl3y3AZrT03LsAR85iWp_yyRo'
 bot = Bot(token=TELEGRAM_TOKEN)
 
 # Модель базы данных для хранения метаданных файлов
