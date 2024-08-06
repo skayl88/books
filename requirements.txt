@@ -1,7 +1,10 @@
-flask
-flask_sqlalchemy
-requests
-python-dotenv
-psycopg2-binary
-edge-tts
+fastapi
+Flask
 python-telegram-bot
+pydantic
+requests
+sqlalchemy
+psycopg2-binary
+python-dotenv
+edge-tts
+werkzeug

@@ -1,7 +1,6 @@
-from flask import Flask, request, jsonify
-import edge_tts
 import os
 import asyncio
+from flask import Flask, request, jsonify
 from werkzeug.utils import secure_filename
 import logging
 import requests
@@ -10,6 +9,11 @@ from flask_sqlalchemy import SQLAlchemy
 from datetime import datetime
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
+from dotenv import load_dotenv
+import edge_tts
+
+# Load environment variables
+load_dotenv()
 
 app = Flask(__name__)
 
@@ -33,7 +37,7 @@ except Exception as e:
 
 # Настройка Telegram Bot
 TELEGRAM_TOKEN = '7132952339:AAEKw5bcSKZl3y3AZrT03LsAR85iWp_yyRo'
-WEBHOOK_URL = 'https://books-mu-ten.vercel.app/telegram'  # Замените на URL вашего приложения на Vercel
+WEBHOOK_URL = 'https://books-mu-ten.vercel.app/telegram'
 
 # Инициализация Telegram Application
 application = Application.builder().token(TELEGRAM_TOKEN).build()
@@ -44,7 +48,7 @@ class File(db.Model):
     filename = db.Column(db.String(255), nullable=False)
     url = db.Column(db.Text, nullable=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    user_id = db.Column(db.Integer, nullable=True)  # если вы хотите связать файлы с пользователем
+    user_id = db.Column(db.Integer, nullable=True)
 
 # Настройки приложения
 ALLOWED_EXTENSIONS = {'txt', 'pdf', 'png', 'jpg', 'jpeg', 'gif', 'mp3'}
