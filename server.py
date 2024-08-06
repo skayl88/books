@@ -35,6 +35,9 @@ except Exception as e:
 TELEGRAM_TOKEN = '7132952339:AAEKw5bcSKZl3y3AZrT03LsAR85iWp_yyRo'
 WEBHOOK_URL = 'https://books-mu-ten.vercel.app/telegram'  # Замените на URL вашего приложения на Vercel
 
+# Инициализация Telegram Application
+application = Application.builder().token(TELEGRAM_TOKEN).build()
+
 # Модель базы данных для хранения метаданных файлов
 class File(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -185,9 +188,6 @@ def telegram_webhook():
     return "ok", 200
 
 def main():
-    global application
-    application = Application.builder().token(TELEGRAM_TOKEN).build()
-
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("book1", book1))
     application.add_handler(CommandHandler("book2", book2))
