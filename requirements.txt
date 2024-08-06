@@ -4,3 +4,4 @@ requests
 python-dotenv
 psycopg2-binary
 edge-tts
+python-telegram-bot
