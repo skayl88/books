@@ -9,7 +9,7 @@ import tempfile
 from flask_sqlalchemy import SQLAlchemy
 from datetime import datetime
 from telegram import Update
-from telegram.ext import Application, CommandHandler, ContextTypes
+from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler
 
 app = Flask(__name__)
 
@@ -33,7 +33,7 @@ except Exception as e:
 
 # Настройка Telegram Bot
 TELEGRAM_TOKEN = '7132952339:AAEKw5bcSKZl3y3AZrT03LsAR85iWp_yyRo'
-WEBHOOK_URL = 'books-mu-ten.vercel.app/telegram'  # Замените на URL вашего приложения на Vercel
+WEBHOOK_URL = 'https://books-mu-ten.vercel.app/telegram'  # Замените на URL вашего приложения на Vercel
 
 # Модель базы данных для хранения метаданных файлов
 class File(db.Model):
@@ -174,7 +174,14 @@ async def book2(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     file_url = response.json().get('file_url')
     await update.message.reply_text(f"Вот ваш аудиофайл: {file_url}")
 
+@app.route('/telegram', methods=['POST'])
+def telegram_webhook():
+    data = request.get_json(force=True)
+    application.update_queue.put(Update.de_json(data, application.bot))
+    return "ok", 200
+
 def main():
+    global application
     application = Application.builder().token(TELEGRAM_TOKEN).build()
 
     application.add_handler(CommandHandler("start", start))
@@ -192,5 +199,5 @@ if __name__ == '__main__':
     with app.app_context():
         db.create_all()  # Создание таблиц в базе данных
 
-    app.run(host='0.0.0.0', port=5000)
     main()
+    app.run(host='0.0.0.0', port=5000)
