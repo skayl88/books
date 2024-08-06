@@ -1,6 +1,6 @@
-Flask[async]
+flask
+flask_sqlalchemy
 requests
-edge-tts
-gunicorn
-Flask-SQLAlchemy
+python-dotenv
 psycopg2-binary
+edge-tts
