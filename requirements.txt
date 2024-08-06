@@ -1,8 +1,11 @@
+fastapi
 Flask
-Flask-SQLAlchemy
 python-telegram-bot
 pydantic
 requests
+sqlalchemy
 psycopg2-binary
 python-dotenv
 edge-tts
+werkzeug
+flask_sqlalchemy

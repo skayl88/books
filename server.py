@@ -33,7 +33,7 @@ except Exception as e:
 
 # Настройка Telegram Bot
 TELEGRAM_TOKEN = '7132952339:AAEKw5bcSKZl3y3AZrT03LsAR85iWp_yyRo'
-WEBHOOK_URL = 'https://books-mu-ten.vercel.app/telegram'
+WEBHOOK_URL = 'https://5127-171-225-184-77.ngrok-free.app/telegram'
 
 # Инициализация Telegram Application
 application = Application.builder().token(TELEGRAM_TOKEN).build()
@@ -197,6 +197,15 @@ def telegram_webhook():
         logger.error(f"Error processing Telegram webhook: {e}")
         return jsonify({"error": str(e)}), 500
 
+def set_webhook():
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/setWebhook"
+    data = {"url": WEBHOOK_URL}
+    response = requests.post(url, data=data)
+    if response.status_code == 200:
+        logger.debug("Webhook установлен успешно")
+    else:
+        logger.error(f"Failed to set webhook: {response.status_code} - {response.text}")
+
 def main():
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("book1", book1))
@@ -204,7 +213,7 @@ def main():
 
     application.run_webhook(
         listen="0.0.0.0",
-        port=5000,
+        port=8443,
         url_path='telegram',
         webhook_url=f"{WEBHOOK_URL}"
     )
@@ -213,5 +222,6 @@ if __name__ == '__main__':
     with app.app_context():
         db.create_all()  # Создание таблиц в базе данных
 
+    set_webhook()  # Установка вебхука при запуске приложения
     main()
     app.run(host='0.0.0.0', port=5000)
