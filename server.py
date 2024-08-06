@@ -9,7 +9,7 @@ import tempfile
 from flask_sqlalchemy import SQLAlchemy
 from datetime import datetime
 from telegram import Update
-from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler
+from telegram.ext import Application, CommandHandler, ContextTypes
 
 app = Flask(__name__)
 
@@ -195,8 +195,8 @@ def main():
     application.run_webhook(
         listen="0.0.0.0",
         port=5000,
-        url_path=TELEGRAM_TOKEN,
-        webhook_url=f"{WEBHOOK_URL}/{TELEGRAM_TOKEN}"
+        url_path='telegram',
+        webhook_url=f"{WEBHOOK_URL}"
     )
 
 if __name__ == '__main__':
