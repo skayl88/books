@@ -8,8 +8,8 @@ import requests
 import tempfile
 from flask_sqlalchemy import SQLAlchemy
 from datetime import datetime
-from telegram import Update, Bot
-from telegram.ext import Updater, CommandHandler, CallbackContext
+from telegram import Update
+from telegram.ext import Application, CommandHandler, ContextTypes
 
 app = Flask(__name__)
 
@@ -33,7 +33,7 @@ except Exception as e:
 
 # Настройка Telegram Bot
 TELEGRAM_TOKEN = '7132952339:AAEKw5bcSKZl3y3AZrT03LsAR85iWp_yyRo'
-bot = Bot(token=TELEGRAM_TOKEN)
+WEBHOOK_URL = 'books-mu-ten.vercel.app/telegram'  # Замените на URL вашего приложения на Vercel
 
 # Модель базы данных для хранения метаданных файлов
 class File(db.Model):
@@ -159,38 +159,38 @@ def generate_audio(text, model):
     return audio_content
 
 # Функции для Telegram Bot
-def start(update: Update, context: CallbackContext) -> None:
-    logger.debug("Received /start command")
-    update.message.reply_text("Привет! Я бот для преобразования текста в аудио. Выберите одну из двух книг: /book1 или /book2.")
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await update.message.reply_html(text="Привет! Я бот для преобразования текста в аудио. Выберите одну из двух книг: /book1 или /book2.")
 
-def book1(update: Update, context: CallbackContext) -> None:
-    logger.debug("Received /book1 command")
+async def book1(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     text = "Habits are the compound interest of self-improvement. Your net worth is a lagging measure of your financial habits. Your weight is a lagging measure of your eating habits. Your knowledge is a lagging measure of your learning habits. You get what you repeat."
     response = requests.post("http://127.0.0.1:5000/text-to-speech", json={"text": text, "filename": "book1_speech", "model": "en-US-GuyNeural"})
     file_url = response.json().get('file_url')
-    update.message.reply_text(f"Вот ваш аудиофайл: {file_url}")
+    await update.message.reply_text(f"Вот ваш аудиофайл: {file_url}")
 
-def book2(update: Update, context: CallbackContext) -> None:
-    logger.debug("Received /book2 command")
+async def book2(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     text = "If you want better results, forget about setting goals. Focus on your system instead. You do not rise to the level of your goals. You fall to the level of your systems. Your goal is your desired outcome. Your system is the collection of daily habits that will get you there."
     response = requests.post("http://127.0.0.1:5000/text-to-speech", json={"text": text, "filename": "book2_speech", "model": "en-US-GuyNeural"})
     file_url = response.json().get('file_url')
-    update.message.reply_text(f"Вот ваш аудиофайл: {file_url}")
+    await update.message.reply_text(f"Вот ваш аудиофайл: {file_url}")
 
 def main():
-    logger.debug("Starting Telegram Bot")
-    updater = Updater(TELEGRAM_TOKEN)
-    dispatcher = updater.dispatcher
+    application = Application.builder().token(TELEGRAM_TOKEN).build()
 
-    dispatcher.add_handler(CommandHandler("start", start))
-    dispatcher.add_handler(CommandHandler("book1", book1))
-    dispatcher.add_handler(CommandHandler("book2", book2))
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("book1", book1))
+    application.add_handler(CommandHandler("book2", book2))
 
-    updater.start_polling()
-    updater.idle()
+    application.run_webhook(
+        listen="0.0.0.0",
+        port=5000,
+        url_path=TELEGRAM_TOKEN,
+        webhook_url=f"{WEBHOOK_URL}/{TELEGRAM_TOKEN}"
+    )
 
 if __name__ == '__main__':
     with app.app_context():
         db.create_all()  # Создание таблиц в базе данных
-    main()
+
     app.run(host='0.0.0.0', port=5000)
+    main()
