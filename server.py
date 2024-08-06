@@ -6,6 +6,8 @@ from werkzeug.utils import secure_filename
 import logging
 import requests
 import tempfile
+from flask_sqlalchemy import SQLAlchemy
+from datetime import datetime
 
 app = Flask(__name__)
 
@@ -15,11 +17,20 @@ logger = logging.getLogger(__name__)
 app.config['DEBUG'] = True
 
 # Настройка Vercel Blob Storage
-BLOB_READ_WRITE_TOKEN = os.getenv('BLOB_READ_WRITE_TOKEN')
-BLOB_STORAGE_URL = "https://cmu8v3vhqan14esy.public.blob.vercel-storage.com"
+BLOB_READ_WRITE_TOKEN = 'vercel_blob_rw_cMu8v3vHQAN14ESY_SBU40vPpLMnSRWD0sHHA9Ug212BCGO'
 
-if not BLOB_READ_WRITE_TOKEN:
-    raise ValueError("BLOB_READ_WRITE_TOKEN environment variable is not set")
+# Настройка базы данных
+app.config['SQLALCHEMY_DATABASE_URI'] = 'postgresql+psycopg2://default:DR9xJNrve5HF@ep-little-poetry-a2krqpco.eu-central-1.aws.neon.tech:5432/verceldb?sslmode=require'
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+db = SQLAlchemy(app)
+
+# Модель базы данных для хранения метаданных файлов
+class File(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    filename = db.Column(db.String(255), nullable=False)
+    url = db.Column(db.Text, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    user_id = db.Column(db.Integer, nullable=True)  # если вы хотите связать файлы с пользователем
 
 # Настройки приложения
 ALLOWED_EXTENSIONS = {'txt', 'pdf', 'png', 'jpg', 'jpeg', 'gif', 'mp3'}
@@ -27,14 +38,14 @@ ALLOWED_EXTENSIONS = {'txt', 'pdf', 'png', 'jpg', 'jpeg', 'gif', 'mp3'}
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
-def upload_to_vercel_blob(filename, file_content):
+def upload_to_vercel_blob(path, data):
     headers = {
-        "Content-Type": "application/octet-stream"
+        "Authorization": f"Bearer {BLOB_READ_WRITE_TOKEN}",
+        "Content-Type": "application/octet-stream",
+        "x-api-version": "7",
+        "x-content-type": "application/octet-stream"
     }
-    files = {
-        'file': (filename, file_content)
-    }
-    response = requests.post(BLOB_STORAGE_URL, headers=headers, files=files)
+    response = requests.put(f"https://blob.vercel-storage.com/{path}", headers=headers, data=data)
     if response.status_code == 200:
         return response.json()["url"]
     else:
@@ -61,6 +72,13 @@ def upload_file():
         file_content = file.read()
         file_url = upload_to_vercel_blob(filename, file_content)
 
+        # Сохранение метаданных в базу данных
+        new_file = File(filename=filename, url=file_url)
+        db.session.add(new_file)
+        db.session.commit()
+
+        logger.debug(f"File metadata saved to database: {filename}, {file_url}")
+
         return jsonify({"file_url": file_url}), 201
 
     return jsonify({"error": "File type not allowed"}), 400
@@ -78,15 +96,36 @@ def text_to_speech():
     if not text or not filename:
         return jsonify({"error": "Please provide both text and filename"}), 400
 
+    # Проверка, существует ли файл с таким именем
+    existing_file = File.query.filter_by(filename=filename).first()
+    if existing_file:
+        logger.debug(f"File already exists: {filename}")
+        return jsonify({"file_url": existing_file.url}), 200
+
     try:
         audio_content = generate_audio(text, model)
         file_url = upload_to_vercel_blob(filename, audio_content)
+
+        # Сохранение метаданных в базу данных
+        new_file = File(filename=filename, url=file_url)
+        db.session.add(new_file)
+        db.session.commit()
+
+        logger.debug(f"File metadata saved to database: {filename}, {file_url}")
 
         return jsonify({"file_url": file_url}), 201
 
     except Exception as e:
         logger.error(f"Error in text-to-speech processing: {e}")
         return jsonify({"error": str(e)}), 500
+
+@app.route('/get-file-url/<filename>', methods=['GET'])
+def get_file_url(filename):
+    file = File.query.filter_by(filename=filename).first()
+    if file:
+        return jsonify({"file_url": file.url}), 200
+    else:
+        return jsonify({"error": "File not found"}), 404
 
 def generate_audio(text, model):
     async def run():
@@ -109,4 +148,6 @@ def generate_audio(text, model):
     return audio_content
 
 if __name__ == '__main__':
+    with app.app_context():
+        db.create_all()  # Создание таблиц в базе данных
     app.run(host='0.0.0.0', port=5000)

@@ -2,3 +2,5 @@ Flask[async]
 requests
 edge-tts
 gunicorn
+Flask-SQLAlchemy
+psycopg2-binary
