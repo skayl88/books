@@ -181,7 +181,7 @@ async def book2(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(f"Вот ваш аудиофайл: {file_url}")
 
 @app.route('/telegram', methods=['POST'])
-async def telegram_webhook():
+def telegram_webhook():
     logger.debug("Received data from Telegram webhook")
     try:
         logger.debug(f"Request data: {request.data}")
@@ -191,7 +191,7 @@ async def telegram_webhook():
             return jsonify({"error": "No data received"}), 400
         
         logger.debug(f"Data received: {data}")
-        await application.update_queue.put(Update.de_json(data, application.bot))
+        asyncio.run(application.update_queue.put(Update.de_json(data, application.bot)))
         return "ok", 200
     except Exception as e:
         logger.error(f"Error processing Telegram webhook: {e}")
