@@ -160,21 +160,25 @@ def generate_audio(text, model):
 
 # Функции для Telegram Bot
 def start(update: Update, context: CallbackContext) -> None:
+    logger.debug("Received /start command")
     update.message.reply_text("Привет! Я бот для преобразования текста в аудио. Выберите одну из двух книг: /book1 или /book2.")
 
 def book1(update: Update, context: CallbackContext) -> None:
+    logger.debug("Received /book1 command")
     text = "Habits are the compound interest of self-improvement. Your net worth is a lagging measure of your financial habits. Your weight is a lagging measure of your eating habits. Your knowledge is a lagging measure of your learning habits. You get what you repeat."
     response = requests.post("http://127.0.0.1:5000/text-to-speech", json={"text": text, "filename": "book1_speech", "model": "en-US-GuyNeural"})
     file_url = response.json().get('file_url')
     update.message.reply_text(f"Вот ваш аудиофайл: {file_url}")
 
 def book2(update: Update, context: CallbackContext) -> None:
+    logger.debug("Received /book2 command")
     text = "If you want better results, forget about setting goals. Focus on your system instead. You do not rise to the level of your goals. You fall to the level of your systems. Your goal is your desired outcome. Your system is the collection of daily habits that will get you there."
     response = requests.post("http://127.0.0.1:5000/text-to-speech", json={"text": text, "filename": "book2_speech", "model": "en-US-GuyNeural"})
     file_url = response.json().get('file_url')
     update.message.reply_text(f"Вот ваш аудиофайл: {file_url}")
 
 def main():
+    logger.debug("Starting Telegram Bot")
     updater = Updater(TELEGRAM_TOKEN)
     dispatcher = updater.dispatcher
 
