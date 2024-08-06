@@ -26,12 +26,24 @@ app.config['DEBUG'] = True
 BLOB_READ_WRITE_TOKEN = os.getenv('BLOB_READ_WRITE_TOKEN')
 
 # Настройка базы данных
-app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('SQLALCHEMY_DATABASE_URI')
+DATABASE_URI = os.getenv('SQLALCHEMY_DATABASE_URI')
+if not DATABASE_URI:
+    raise RuntimeError("SQLALCHEMY_DATABASE_URI is not set in environment variables")
+
+app.config['SQLALCHEMY_DATABASE_URI'] = DATABASE_URI
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-db = SQLAlchemy(app)
+
+try:
+    db = SQLAlchemy(app)
+except Exception as e:
+    logger.error(f"Failed to initialize SQLAlchemy: {e}")
+    raise
 
 # Настройка Telegram Bot
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
+if not TELEGRAM_TOKEN:
+    raise RuntimeError("TELEGRAM_TOKEN is not set in environment variables")
+
 bot = Bot(token=TELEGRAM_TOKEN)
 
 # Модель базы данных для хранения метаданных файлов
