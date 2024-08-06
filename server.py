@@ -8,6 +8,12 @@ import requests
 import tempfile
 from flask_sqlalchemy import SQLAlchemy
 from datetime import datetime
+from dotenv import load_dotenv
+from telegram import Update, Bot
+from telegram.ext import Updater, CommandHandler, CallbackContext
+
+# Загрузка переменных окружения из .env файла
+load_dotenv()
 
 app = Flask(__name__)
 
@@ -17,12 +23,16 @@ logger = logging.getLogger(__name__)
 app.config['DEBUG'] = True
 
 # Настройка Vercel Blob Storage
-BLOB_READ_WRITE_TOKEN = 'vercel_blob_rw_cMu8v3vHQAN14ESY_SBU40vPpLMnSRWD0sHHA9Ug212BCGO'
+BLOB_READ_WRITE_TOKEN = os.getenv('BLOB_READ_WRITE_TOKEN')
 
 # Настройка базы данных
-app.config['SQLALCHEMY_DATABASE_URI'] = 'postgresql+psycopg2://default:DR9xJNrve5HF@ep-little-poetry-a2krqpco.eu-central-1.aws.neon.tech:5432/verceldb?sslmode=require'
+app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('SQLALCHEMY_DATABASE_URI')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 db = SQLAlchemy(app)
+
+# Настройка Telegram Bot
+TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
+bot = Bot(token=TELEGRAM_TOKEN)
 
 # Модель базы данных для хранения метаданных файлов
 class File(db.Model):
@@ -147,7 +157,35 @@ def generate_audio(text, model):
 
     return audio_content
 
+# Функции для Telegram Bot
+def start(update: Update, context: CallbackContext) -> None:
+    update.message.reply_text("Привет! Я бот для преобразования текста в аудио. Выберите одну из двух книг: /book1 или /book2.")
+
+def book1(update: Update, context: CallbackContext) -> None:
+    text = "Habits are the compound interest of self-improvement. Your net worth is a lagging measure of your financial habits. Your weight is a lagging measure of your eating habits. Your knowledge is a lagging measure of your learning habits. You get what you repeat."
+    response = requests.post("http://127.0.0.1:5000/text-to-speech", json={"text": text, "filename": "book1_speech", "model": "en-US-GuyNeural"})
+    file_url = response.json().get('file_url')
+    update.message.reply_text(f"Вот ваш аудиофайл: {file_url}")
+
+def book2(update: Update, context: CallbackContext) -> None:
+    text = "If you want better results, forget about setting goals. Focus on your system instead. You do not rise to the level of your goals. You fall to the level of your systems. Your goal is your desired outcome. Your system is the collection of daily habits that will get you there."
+    response = requests.post("http://127.0.0.1:5000/text-to-speech", json={"text": text, "filename": "book2_speech", "model": "en-US-GuyNeural"})
+    file_url = response.json().get('file_url')
+    update.message.reply_text(f"Вот ваш аудиофайл: {file_url}")
+
+def main():
+    updater = Updater(TELEGRAM_TOKEN)
+    dispatcher = updater.dispatcher
+
+    dispatcher.add_handler(CommandHandler("start", start))
+    dispatcher.add_handler(CommandHandler("book1", book1))
+    dispatcher.add_handler(CommandHandler("book2", book2))
+
+    updater.start_polling()
+    updater.idle()
+
 if __name__ == '__main__':
     with app.app_context():
         db.create_all()  # Создание таблиц в базе данных
+    main()
     app.run(host='0.0.0.0', port=5000)
