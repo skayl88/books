@@ -9,11 +9,7 @@ from flask_sqlalchemy import SQLAlchemy
 from datetime import datetime
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
-from dotenv import load_dotenv
 import edge_tts
-
-# Load environment variables
-load_dotenv()
 
 app = Flask(__name__)
 
