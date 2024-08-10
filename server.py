@@ -1,13 +1,15 @@
 import os
 import asyncio
-from flask import Flask, request, jsonify
-from werkzeug.utils import secure_filename
+import json
 import logging
 import requests
 import tempfile
+from flask import Flask, request, jsonify
+from werkzeug.utils import secure_filename
 from flask_sqlalchemy import SQLAlchemy
 from datetime import datetime
 import edge_tts
+import anthropic
 
 app = Flask(__name__)
 
@@ -17,20 +19,16 @@ logger = logging.getLogger(__name__)
 app.config['DEBUG'] = True
 
 # Настройка Vercel Blob Storage
-BLOB_READ_WRITE_TOKEN = 'vercel_blob_rw_cMu8v3vHQAN14ESY_SBU40vPpLMnSRWD0sHHA9Ug212BCGO'
-
-# Получение ключа Anthropic из переменных окружения
-KEY_ANTROPIC = os.environ.get('KEY_ANTROPIC')
-
+BLOB_READ_WRITE_TOKEN = "vercel_blob_rw_cMu8v3vHQAN14ESY_SBU40vPpLMnSRWD0sHHA9Ug212BCGO"
+ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 # Настройка базы данных
-app.config['SQLALCHEMY_DATABASE_URI'] = 'postgresql+psycopg2://default:DR9xJNrve5HF@ep-little-poetry-a2krqpco.eu-central-1.aws.neon.tech:5432/verceldb?sslmode=require'
+app.config['SQLALCHEMY_DATABASE_URI'] = "postgresql://default:TK1fxnp7NZOh@ep-little-poetry-a2krqpco.eu-central-1.aws.neon.tech:5432/verceldb?sslmode=require"
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
-try:
-    db = SQLAlchemy(app)
-except Exception as e:
-    logger.error(f"Failed to initialize SQLAlchemy: {e}")
-    raise
+db = SQLAlchemy(app)
+from flask_migrate import Migrate
+
+migrate = Migrate(app, db)
 
 # Модель базы данных для хранения метаданных файлов
 class File(db.Model):
@@ -39,9 +37,8 @@ class File(db.Model):
     url = db.Column(db.Text, nullable=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     user_id = db.Column(db.Integer, nullable=True)
-    title = db.Column(db.String(255), nullable=True)
-    author = db.Column(db.String(255), nullable=True)
-    summary_text = db.Column(db.Text, nullable=True)
+    title = db.Column(db.String(255), nullable=False)  # Название книги
+    author = db.Column(db.String(255), nullable=False)  # Автор книги
 
 # Настройки приложения
 ALLOWED_EXTENSIONS = {'txt', 'pdf', 'png', 'jpg', 'jpeg', 'gif', 'mp3'}
@@ -67,67 +64,68 @@ def upload_to_vercel_blob(path, data):
 def home():
     return jsonify({"status": "Server is running"}), 200
 
-@app.route('/upload', methods=['POST'])
-def upload_file():
-    if 'file' not in request.files:
-        return jsonify({"error": "No file part"}), 400
-
-    file = request.files['file']
-
-    if file.filename == '':
-        return jsonify({"error": "No selected file"}), 400
-
-    if file and allowed_file(file.filename):
-        filename = secure_filename(file.filename)
-        
-        file_content = file.read()
-        file_url = upload_to_vercel_blob(filename, file_content)
-
-        # Сохранение метаданных в базу данных
-        new_file = File(filename=filename, url=file_url)
-        db.session.add(new_file)
-        db.session.commit()
-
-        logger.debug(f"File metadata saved to database: {filename}, {file_url}")
-
-        return jsonify({"file_url": file_url}), 201
-
-    return jsonify({"error": "File type not allowed"}), 400
-
-@app.route('/text-to-speech', methods=['POST', 'GET'])
-def text_to_speech():
-    if request.method == 'GET':
-        return jsonify({"status": "Text-to-Speech endpoint is ready"}), 200
-
+@app.route('/generate-audio-book', methods=['POST'])
+def generate_audio_book():
     data = request.json
-    text = data.get('text')
-    filename = secure_filename(data.get('filename') + '.mp3')
-    model = data.get('model', 'en-US-GuyNeural')
+    book_title = data.get('title')
+    book_author = data.get('author')
 
-    if not text or not filename:
-        return jsonify({"error": "Please provide both text and filename"}), 400
-
-    # Проверка, существует ли файл с таким именем
-    existing_file = File.query.filter_by(filename=filename).first()
-    if existing_file:
-        logger.debug(f"File already exists: {filename}")
-        return jsonify({"file_url": existing_file.url}), 200
+    if not book_title:
+        return jsonify({"error": "Please provide a book title"}), 400
 
     try:
-        audio_content = generate_audio(text, model)
+        # Чтение системного сообщения из файла
+        with open('system_message.txt', 'r', encoding='utf-8') as file:
+            system_message = file.read()
+
+        # Инициализация клиента Anthropic с использованием API-ключа
+        client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
+        message = client.messages.create(
+            model="claude-3-haiku-20240307",
+            max_tokens=4096,
+            temperature=1,
+            system=system_message,
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": f"{book_title}"
+                        }
+                    ]
+                }
+            ]
+        )
+
+        raw_text = message.content[0].text
+        summary_data = json.loads(raw_text, strict=False)
+
+        determinable = summary_data.get('determinable')
+        summary_possible = summary_data.get('summary_possible')
+        title = summary_data.get('title')
+        author = summary_data.get('author')
+        summary_text = summary_data.get('summary_text')
+
+        if not summary_possible:
+            return jsonify({"error": "Unable to generate summary for the given book."}), 400
+
+        # Генерация аудио на основе текста
+        audio_content = generate_audio(summary_text, "en-US-GuyNeural")
+        filename = secure_filename(f"{title}_{author}.mp3")
         file_url = upload_to_vercel_blob(filename, audio_content)
 
-        # Сохранение метаданных в базу данных
-        new_file = File(filename=filename, url=file_url)
+        # Сохранение данных в базу данных, включая название книги и автора
+        new_file = File(filename=filename, url=file_url, title=title, author=author)
         db.session.add(new_file)
         db.session.commit()
 
-        logger.debug(f"File metadata saved to database: {filename}, {file_url}")
+        logger.debug(f"Audio generated and saved: {filename}")
 
-        return jsonify({"file_url": file_url}), 201
+        return jsonify({"file_url": file_url, "summary_file": summary_text}), 201
 
     except Exception as e:
-        logger.error(f"Error in text-to-speech processing: {e}")
+        logger.error(f"Error generating audio book: {e}")
         return jsonify({"error": str(e)}), 500
 
 @app.route('/get-file-url/<filename>', methods=['GET'])
@@ -138,6 +136,8 @@ def get_file_url(filename):
     else:
         return jsonify({"error": "File not found"}), 404
 
+<<<<<<< HEAD
+=======
 @app.route('/generate-audio-book', methods=['POST'])
 def generate_audio_book():
     data = request.json
@@ -150,8 +150,8 @@ def generate_audio_book():
     # Запрос к API Anthropic для получения резюме книги
     try:
         anthropic_request = {
-            "model": "claude-3-5-sonnet-20240620",
-            "messages": f"Please provide a summary for the book titled '{book_title}' by {book_author}.",
+            "model": "claude-v1",
+            "prompt": f"Please provide a summary for the book titled '{book_title}' by {book_author}.",
             "max_tokens_to_sample": 4000
         }
         headers = {
@@ -160,13 +160,9 @@ def generate_audio_book():
         }
 
         response = requests.post("https://api.anthropic.com/v1/complete", headers=headers, json=anthropic_request)
-        
-        # Логирование полного ответа API
-        logger.debug(f"Anthropic API response: {response.text}")
-
         response_data = response.json()
+
         summary_text = response_data.get('completion')
-        
         if not summary_text:
             raise Exception("Failed to generate summary from Anthropic API")
 
@@ -193,7 +189,8 @@ def generate_audio_book():
     except Exception as e:
         logger.error(f"Error generating audio book: {e}")
         return jsonify({"error": str(e)}), 500
-    
+
+>>>>>>> parent of 9770040 (fix)
 def generate_audio(text, model):
     async def run():
         communicate = edge_tts.Communicate(text, model)
