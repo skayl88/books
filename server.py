@@ -27,9 +27,6 @@ app.config['SQLALCHEMY_DATABASE_URI'] = "postgresql://default:TK1fxnp7NZOh@ep-li
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 db = SQLAlchemy(app)
-from flask_migrate import Migrate
-
-migrate = Migrate(app, db)
 
 # Модель базы данных для хранения метаданных файлов
 class File(db.Model):
