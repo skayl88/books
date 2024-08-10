@@ -13,6 +13,9 @@ COPY requirements.txt requirements.txt
 # Install the Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Set environment variables
+ENV ANTHROPIC_API_KEY=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
+
 # Copy the rest of the application code into the container
 COPY . .
 
