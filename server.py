@@ -19,6 +19,8 @@ app.config['DEBUG'] = True
 # Настройка Vercel Blob Storage
 BLOB_READ_WRITE_TOKEN = 'vercel_blob_rw_cMu8v3vHQAN14ESY_SBU40vPpLMnSRWD0sHHA9Ug212BCGO'
 
+# Получение ключа Anthropic из переменных окружения
+KEY_ANTROPIC = os.environ.get('KEY_ANTROPIC')
 
 # Настройка базы данных
 app.config['SQLALCHEMY_DATABASE_URI'] = 'postgresql+psycopg2://default:DR9xJNrve5HF@ep-little-poetry-a2krqpco.eu-central-1.aws.neon.tech:5432/verceldb?sslmode=require'
@@ -37,6 +39,9 @@ class File(db.Model):
     url = db.Column(db.Text, nullable=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     user_id = db.Column(db.Integer, nullable=True)
+    title = db.Column(db.String(255), nullable=True)
+    author = db.Column(db.String(255), nullable=True)
+    summary_text = db.Column(db.Text, nullable=True)
 
 # Настройки приложения
 ALLOWED_EXTENSIONS = {'txt', 'pdf', 'png', 'jpg', 'jpeg', 'gif', 'mp3'}
@@ -132,6 +137,58 @@ def get_file_url(filename):
         return jsonify({"file_url": file.url}), 200
     else:
         return jsonify({"error": "File not found"}), 404
+
+@app.route('/generate-audio-book', methods=['POST'])
+def generate_audio_book():
+    data = request.json
+    book_title = data.get('title')
+    book_author = data.get('author')
+
+    if not book_title or not book_author:
+        return jsonify({"error": "Please provide both book title and author"}), 400
+
+    # Запрос к API Anthropic для получения резюме книги
+    try:
+        anthropic_request = {
+            "model": "claude-v1",
+            "prompt": f"Please provide a summary for the book titled '{book_title}' by {book_author}.",
+            "max_tokens_to_sample": 4000
+        }
+        headers = {
+            "x-api-key": KEY_ANTROPIC,
+            "Content-Type": "application/json"
+        }
+
+        response = requests.post("https://api.anthropic.com/v1/complete", headers=headers, json=anthropic_request)
+        response_data = response.json()
+
+        summary_text = response_data.get('completion')
+        if not summary_text:
+            raise Exception("Failed to generate summary from Anthropic API")
+
+        # Генерация аудио на основе полученного текста
+        filename = secure_filename(f"{book_title}_{book_author}.mp3")
+        audio_content = generate_audio(summary_text, "en-US-GuyNeural")
+        file_url = upload_to_vercel_blob(filename, audio_content)
+
+        # Сохранение данных о книге и аудио в базу данных
+        new_file = File(
+            filename=filename,
+            url=file_url,
+            title=book_title,
+            author=book_author,
+            summary_text=summary_text
+        )
+        db.session.add(new_file)
+        db.session.commit()
+
+        logger.debug(f"Audio book generated and saved: {filename}")
+
+        return jsonify({"file_url": file_url, "summary_text": summary_text}), 201
+
+    except Exception as e:
+        logger.error(f"Error generating audio book: {e}")
+        return jsonify({"error": str(e)}), 500
 
 def generate_audio(text, model):
     async def run():
