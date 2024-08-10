@@ -16,10 +16,6 @@ logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 app.config['DEBUG'] = True
 
-# Получение секретов и других настроек из переменных окружения
-BLOB_READ_WRITE_TOKEN = os.environ.get('BLOB_READ_WRITE_TOKEN')
-KEY_ANTROPIC = os.environ.get('KEY_ANTROPIC')
-DATABASE_URL = os.environ.get('DATABASE_URL')
 # Настройка Vercel Blob Storage
 BLOB_READ_WRITE_TOKEN = 'vercel_blob_rw_cMu8v3vHQAN14ESY_SBU40vPpLMnSRWD0sHHA9Ug212BCGO'
 
@@ -28,35 +24,19 @@ BLOB_READ_WRITE_TOKEN = 'vercel_blob_rw_cMu8v3vHQAN14ESY_SBU40vPpLMnSRWD0sHHA9Ug
 app.config['SQLALCHEMY_DATABASE_URI'] = 'postgresql+psycopg2://default:DR9xJNrve5HF@ep-little-poetry-a2krqpco.eu-central-1.aws.neon.tech:5432/verceldb?sslmode=require'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
-# Проверка наличия необходимых переменных окружения
-if not BLOB_READ_WRITE_TOKEN:
-    raise EnvironmentError("Missing required environment variable: BLOB_READ_WRITE_TOKEN")
-if not KEY_ANTROPIC:
-    raise EnvironmentError("Missing required environment variable: KEY_ANTROPIC")
-if not DATABASE_URL:
-    raise EnvironmentError("Missing required environment variable: DATABASE_URL")
-
-# Настройка базы данных
-app.config['SQLALCHEMY_DATABASE_URI'] = DATABASE_URL
-app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-
 try:
     db = SQLAlchemy(app)
 except Exception as e:
     logger.error(f"Failed to initialize SQLAlchemy: {e}")
     raise
 
-# Модель базы данных для хранения метаданных файлов и данных о книге
-class BookSummary(db.Model):
+# Модель базы данных для хранения метаданных файлов
+class File(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     filename = db.Column(db.String(255), nullable=False)
     url = db.Column(db.Text, nullable=False)
-    title = db.Column(db.String(255), nullable=True)
-    author = db.Column(db.String(255), nullable=True)
-    summary_text = db.Column(db.Text, nullable=True)
-    determinable = db.Column(db.Boolean, nullable=False)
-    summary_possible = db.Column(db.Boolean, nullable=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    user_id = db.Column(db.Integer, nullable=True)
 
 # Настройки приложения
 ALLOWED_EXTENSIONS = {'txt', 'pdf', 'png', 'jpg', 'jpeg', 'gif', 'mp3'}
@@ -82,74 +62,76 @@ def upload_to_vercel_blob(path, data):
 def home():
     return jsonify({"status": "Server is running"}), 200
 
-@app.route('/generate-audio-from-book', methods=['POST'])
-def generate_audio_from_book():
-    data = request.json
-    book_title = data.get('book_title')
-    author = data.get('author')
+@app.route('/upload', methods=['POST'])
+def upload_file():
+    if 'file' not in request.files:
+        return jsonify({"error": "No file part"}), 400
 
-    if not book_title or not author:
-        return jsonify({"error": "Please provide both book title and author"}), 400
+    file = request.files['file']
 
-    # Чтение системного сообщения из файла
-    try:
-        with open('system_message.txt', 'r') as file:
-            system_message = file.read()
-    except Exception as e:
-        logger.error(f"Failed to read system message file: {e}")
-        return jsonify({"error": "System message file could not be read"}), 500
+    if file.filename == '':
+        return jsonify({"error": "No selected file"}), 400
 
-    # Формирование запроса к API Anthropic
-    prompt = f"{system_message}\n\nModel: Claude 3.5 Sonnet\nTemperature: 1\nMax tokens: 4000\n\nPlease provide a summary for the book titled '{book_title}' by {author}."
-    headers = {
-        "x-api-key": KEY_ANTROPIC,
-        "Content-Type": "application/json"
-    }
-    anthropic_request = {
-        "prompt": prompt,
-        "model": "claude-v1",
-        "max_tokens_to_sample": 4000
-    }
+    if file and allowed_file(file.filename):
+        filename = secure_filename(file.filename)
+        
+        file_content = file.read()
+        file_url = upload_to_vercel_blob(filename, file_content)
 
-    try:
-        response = requests.post("https://api.anthropic.com/v1/complete", headers=headers, json=anthropic_request)
-        response_data = response.json()
-
-        # Извлечение данных из ответа
-        determinable = response_data.get('determinable', False)
-        summary_possible = response_data.get('summary_possible', False)
-        title = response_data.get('title', book_title if determinable else None)
-        author = response_data.get('author', author if determinable else None)
-        summary_text = response_data.get('summary_text', None)
-
-        if not summary_possible or not summary_text:
-            raise Exception("Summary could not be generated from Anthropic API")
-
-        # Генерация аудио на основе полученного текста
-        audio_content = generate_audio(summary_text, "en-US-GuyNeural")
-        filename = secure_filename(f"{title}_{author}.mp3")
-        file_url = upload_to_vercel_blob(filename, audio_content)
-
-        # Сохранение данных о книге и аудио в базу данных
-        new_summary = BookSummary(
-            filename=filename,
-            url=file_url,
-            title=title,
-            author=author,
-            summary_text=summary_text,
-            determinable=determinable,
-            summary_possible=summary_possible
-        )
-        db.session.add(new_summary)
+        # Сохранение метаданных в базу данных
+        new_file = File(filename=filename, url=file_url)
+        db.session.add(new_file)
         db.session.commit()
 
-        logger.debug(f"Audio generated and saved: {filename}")
+        logger.debug(f"File metadata saved to database: {filename}, {file_url}")
+
+        return jsonify({"file_url": file_url}), 201
+
+    return jsonify({"error": "File type not allowed"}), 400
+
+@app.route('/text-to-speech', methods=['POST', 'GET'])
+def text_to_speech():
+    if request.method == 'GET':
+        return jsonify({"status": "Text-to-Speech endpoint is ready"}), 200
+
+    data = request.json
+    text = data.get('text')
+    filename = secure_filename(data.get('filename') + '.mp3')
+    model = data.get('model', 'en-US-GuyNeural')
+
+    if not text or not filename:
+        return jsonify({"error": "Please provide both text and filename"}), 400
+
+    # Проверка, существует ли файл с таким именем
+    existing_file = File.query.filter_by(filename=filename).first()
+    if existing_file:
+        logger.debug(f"File already exists: {filename}")
+        return jsonify({"file_url": existing_file.url}), 200
+
+    try:
+        audio_content = generate_audio(text, model)
+        file_url = upload_to_vercel_blob(filename, audio_content)
+
+        # Сохранение метаданных в базу данных
+        new_file = File(filename=filename, url=file_url)
+        db.session.add(new_file)
+        db.session.commit()
+
+        logger.debug(f"File metadata saved to database: {filename}, {file_url}")
 
         return jsonify({"file_url": file_url}), 201
 
     except Exception as e:
-        logger.error(f"Error generating audio from book title: {e}")
+        logger.error(f"Error in text-to-speech processing: {e}")
         return jsonify({"error": str(e)}), 500
+
+@app.route('/get-file-url/<filename>', methods=['GET'])
+def get_file_url(filename):
+    file = File.query.filter_by(filename=filename).first()
+    if file:
+        return jsonify({"file_url": file.url}), 200
+    else:
+        return jsonify({"error": "File not found"}), 404
 
 def generate_audio(text, model):
     async def run():
