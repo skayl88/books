@@ -9,3 +9,4 @@ python-dotenv
 edge-tts
 werkzeug
 flask_sqlalchemy
+anthropic
