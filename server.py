@@ -21,6 +21,7 @@ app.config['DEBUG'] = True
 # Настройка Vercel Blob Storage
 BLOB_READ_WRITE_TOKEN = "vercel_blob_rw_cMu8v3vHQAN14ESY_SBU40vPpLMnSRWD0sHHA9Ug212BCGO"
 ANTHROPIC_API_KEY = "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"
+ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 # Настройка базы данных
 app.config['SQLALCHEMY_DATABASE_URI'] = "postgresql://default:TK1fxnp7NZOh@ep-little-poetry-a2krqpco.eu-central-1.aws.neon.tech:5432/verceldb?sslmode=require"
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
@@ -136,61 +137,6 @@ def get_file_url(filename):
     else:
         return jsonify({"error": "File not found"}), 404
 
-<<<<<<< HEAD
-=======
-@app.route('/generate-audio-book', methods=['POST'])
-def generate_audio_book():
-    data = request.json
-    book_title = data.get('title')
-    book_author = data.get('author')
-
-    if not book_title or not book_author:
-        return jsonify({"error": "Please provide both book title and author"}), 400
-
-    # Запрос к API Anthropic для получения резюме книги
-    try:
-        anthropic_request = {
-            "model": "claude-v1",
-            "prompt": f"Please provide a summary for the book titled '{book_title}' by {book_author}.",
-            "max_tokens_to_sample": 4000
-        }
-        headers = {
-            "x-api-key": KEY_ANTROPIC,
-            "Content-Type": "application/json"
-        }
-
-        response = requests.post("https://api.anthropic.com/v1/complete", headers=headers, json=anthropic_request)
-        response_data = response.json()
-
-        summary_text = response_data.get('completion')
-        if not summary_text:
-            raise Exception("Failed to generate summary from Anthropic API")
-
-        # Генерация аудио на основе полученного текста
-        filename = secure_filename(f"{book_title}_{book_author}.mp3")
-        audio_content = generate_audio(summary_text, "en-US-GuyNeural")
-        file_url = upload_to_vercel_blob(filename, audio_content)
-
-        # Сохранение данных о книге и аудио в базу данных
-        new_file = File(
-            filename=filename,
-            url=file_url,
-            title=book_title,
-            author=book_author,
-            summary_text=summary_text
-        )
-        db.session.add(new_file)
-        db.session.commit()
-
-        logger.debug(f"Audio book generated and saved: {filename}")
-
-        return jsonify({"file_url": file_url, "summary_text": summary_text}), 201
-
-    except Exception as e:
-        logger.error(f"Error generating audio book: {e}")
-        return jsonify({"error": str(e)}), 500
-
->>>>>>> parent of 9770040 (fix)
 def generate_audio(text, model):
     async def run():
         communicate = edge_tts.Communicate(text, model)
