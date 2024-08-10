@@ -16,10 +16,18 @@ logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 app.config['DEBUG'] = True
 
-# Получение секретов из переменных окружения
-BLOB_READ_WRITE_TOKEN = os.getenv('BLOB_READ_WRITE_TOKEN')
-KEY_ANTROPIC = os.getenv('KEY_ANTROPIC')
-DATABASE_URL = os.getenv('DATABASE_URL')
+# Получение секретов и других настроек из переменных окружения
+BLOB_READ_WRITE_TOKEN = os.environ.get('BLOB_READ_WRITE_TOKEN')
+KEY_ANTROPIC = os.environ.get('KEY_ANTROPIC')
+DATABASE_URL = os.environ.get('DATABASE_URL')
+
+# Проверка наличия необходимых переменных окружения
+if not BLOB_READ_WRITE_TOKEN:
+    raise EnvironmentError("Missing required environment variable: BLOB_READ_WRITE_TOKEN")
+if not KEY_ANTROPIC:
+    raise EnvironmentError("Missing required environment variable: KEY_ANTROPIC")
+if not DATABASE_URL:
+    raise EnvironmentError("Missing required environment variable: DATABASE_URL")
 
 # Настройка базы данных
 app.config['SQLALCHEMY_DATABASE_URI'] = DATABASE_URL
@@ -71,6 +79,7 @@ def home():
 def generate_audio_from_book():
     data = request.json
     book_title = data.get('book_title')
+    author = data.get('author')
 
     if not book_title or not author:
         return jsonify({"error": "Please provide both book title and author"}), 400
@@ -84,14 +93,14 @@ def generate_audio_from_book():
         return jsonify({"error": "System message file could not be read"}), 500
 
     # Формирование запроса к API Anthropic
-    prompt = f"{system_message}\n\nPlease provide a summary for the book titled '{book_title}' by {author}."
+    prompt = f"{system_message}\n\nModel: Claude 3.5 Sonnet\nTemperature: 1\nMax tokens: 4000\n\nPlease provide a summary for the book titled '{book_title}' by {author}."
     headers = {
         "x-api-key": KEY_ANTROPIC,
         "Content-Type": "application/json"
     }
     anthropic_request = {
         "prompt": prompt,
-        "model": "Claude 3.5 Sonnet",
+        "model": "claude-v1",
         "max_tokens_to_sample": 4000
     }
 
