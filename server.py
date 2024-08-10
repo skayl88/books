@@ -20,7 +20,7 @@ app.config['DEBUG'] = True
 
 # Настройка Vercel Blob Storage
 BLOB_READ_WRITE_TOKEN = "vercel_blob_rw_cMu8v3vHQAN14ESY_SBU40vPpLMnSRWD0sHHA9Ug212BCGO"
-ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
+ANTHROPIC_API_KEY = "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"
 # Настройка базы данных
 app.config['SQLALCHEMY_DATABASE_URI'] = "postgresql://default:TK1fxnp7NZOh@ep-little-poetry-a2krqpco.eu-central-1.aws.neon.tech:5432/verceldb?sslmode=require"
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
