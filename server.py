@@ -150,8 +150,8 @@ def generate_audio_book():
     # Запрос к API Anthropic для получения резюме книги
     try:
         anthropic_request = {
-            "model": "claude-v1",
-            "prompt": f"Please provide a summary for the book titled '{book_title}' by {book_author}.",
+            "model": "claude-3-5-sonnet-20240620",
+            "messages": f"Please provide a summary for the book titled '{book_title}' by {book_author}.",
             "max_tokens_to_sample": 4000
         }
         headers = {
@@ -160,9 +160,13 @@ def generate_audio_book():
         }
 
         response = requests.post("https://api.anthropic.com/v1/complete", headers=headers, json=anthropic_request)
-        response_data = response.json()
+        
+        # Логирование полного ответа API
+        logger.debug(f"Anthropic API response: {response.text}")
 
+        response_data = response.json()
         summary_text = response_data.get('completion')
+        
         if not summary_text:
             raise Exception("Failed to generate summary from Anthropic API")
 
@@ -189,7 +193,7 @@ def generate_audio_book():
     except Exception as e:
         logger.error(f"Error generating audio book: {e}")
         return jsonify({"error": str(e)}), 500
-
+    
 def generate_audio(text, model):
     async def run():
         communicate = edge_tts.Communicate(text, model)
