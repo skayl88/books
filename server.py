@@ -19,9 +19,10 @@ app.config['DEBUG'] = True
 # Получение секретов из переменных окружения
 BLOB_READ_WRITE_TOKEN = os.getenv('BLOB_READ_WRITE_TOKEN')
 KEY_ANTROPIC = os.getenv('KEY_ANTROPIC')
+DATABASE_URL = os.getenv('DATABASE_URL')
 
 # Настройка базы данных
-app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL')
+app.config['SQLALCHEMY_DATABASE_URI'] = DATABASE_URL
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 try:
@@ -70,7 +71,6 @@ def home():
 def generate_audio_from_book():
     data = request.json
     book_title = data.get('book_title')
-    author = data.get('author')
 
     if not book_title or not author:
         return jsonify({"error": "Please provide both book title and author"}), 400
@@ -84,14 +84,14 @@ def generate_audio_from_book():
         return jsonify({"error": "System message file could not be read"}), 500
 
     # Формирование запроса к API Anthropic
-    prompt = f"{system_message}\n\nModel: Claude 3.5 Sonnet\nTemperature: 1\nMax tokens: 4000\n\nPlease provide a summary for the book titled '{book_title}' by {author}."
+    prompt = f"{system_message}\n\nPlease provide a summary for the book titled '{book_title}' by {author}."
     headers = {
         "x-api-key": KEY_ANTROPIC,
         "Content-Type": "application/json"
     }
     anthropic_request = {
         "prompt": prompt,
-        "model": "claude-v1",
+        "model": "Claude 3.5 Sonnet",
         "max_tokens_to_sample": 4000
     }
 
