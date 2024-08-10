@@ -77,7 +77,7 @@ def generate_audio_book():
             system_message = file.read()
 
         # Инициализация клиента Anthropic с использованием API-ключа
-        client = anthropic.Anthropic(api_key="vercel_blob_rw_cMu8v3vHQAN14ESY_SBU40vPpLMnSRWD0sHHA9Ug212BCGO")
+        client = anthropic.Anthropic(api_key="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")
         message = client.messages.create(
             model="claude-3-haiku-20240307",
             max_tokens=4096,
