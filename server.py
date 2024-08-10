@@ -20,6 +20,12 @@ app.config['DEBUG'] = True
 BLOB_READ_WRITE_TOKEN = os.environ.get('BLOB_READ_WRITE_TOKEN')
 KEY_ANTROPIC = os.environ.get('KEY_ANTROPIC')
 DATABASE_URL = os.environ.get('DATABASE_URL')
+# Настройка Vercel Blob Storage
+BLOB_READ_WRITE_TOKEN = 'vercel_blob_rw_cMu8v3vHQAN14ESY_SBU40vPpLMnSRWD0sHHA9Ug212BCGO'
+
+# Настройка базы данных
+app.config['SQLALCHEMY_DATABASE_URI'] = 'postgresql+psycopg2://default:DR9xJNrve5HF@ep-little-poetry-a2krqpco.eu-central-1.aws.neon.tech:5432/verceldb?sslmode=require'
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 # Проверка наличия необходимых переменных окружения
 if not BLOB_READ_WRITE_TOKEN:
