@@ -82,7 +82,7 @@ def generate_audio_book():
                 api_key=ANTHROPIC_API_KEY,
             )
         message = client.messages.create(
-            model="claude-3-haiku-20240307",
+          model="claude-3-5-sonnet-20240620",
             max_tokens=4096,
             temperature=1,
             system=system_message,
