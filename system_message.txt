@@ -127,7 +127,7 @@ You are part of a team of creme de la creme experts that creates incredible summ
   "summary_possible": true,
   "title": "Sapiens: A Brief History of Humankind",
   "author": "Yuval Noah Harari",
-  "summary_text": "[Summary text here... (approximately 4000 characters)]"
+  "summary_text": "[Summary text here... (approximately 3000 characters)]"
 }
 </brief_output_example>
 
