@@ -65,7 +65,7 @@ async def home():
 
 @app.route('/generate-audio-book', methods=['POST'])
 async def generate_audio_book():
-    data = await request.json
+    data = request.get_json()  # Используем синхронный метод для получения данных
     book_title = data.get('title')
     book_author = data.get('author')
 
