@@ -86,7 +86,7 @@ async def generate_audio_book():
         message = await asyncio.wait_for(
             asyncio.to_thread(
                 client.messages.create,
-                model="claude-3-5-sonnet-20240620",
+               model="claude-3-haiku-20240307",
                 max_tokens=4096,
                 temperature=1,
                 system=system_message,
