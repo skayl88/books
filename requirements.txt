@@ -2,7 +2,7 @@ fastapi
 Flask
 python-telegram-bot
 pydantic
-requests
+aiohttp
 sqlalchemy
 psycopg2-binary
 python-dotenv

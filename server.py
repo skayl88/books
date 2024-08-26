@@ -2,7 +2,7 @@ import os
 import asyncio
 import json
 import logging
-import requests
+import aiohttp  # Добавляем aiohttp для асинхронных HTTP-запросов
 import tempfile
 from flask import Flask, request, jsonify
 from werkzeug.utils import secure_filename
@@ -44,26 +44,28 @@ ALLOWED_EXTENSIONS = {'txt', 'pdf', 'png', 'jpg', 'jpeg', 'gif', 'mp3'}
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
-def upload_to_vercel_blob(path, data):
+async def upload_to_vercel_blob(path, data):
     headers = {
         "Authorization": f"Bearer {BLOB_READ_WRITE_TOKEN}",
         "Content-Type": "application/octet-stream",
         "x-api-version": "7",
         "x-content-type": "application/octet-stream"
     }
-    response = requests.put(f"https://blob.vercel-storage.com/{path}", headers=headers, data=data)
-    if response.status_code == 200:
-        return response.json()["url"]
-    else:
-        logger.error(f"Failed to upload file to Vercel Blob Storage: {response.text}")
-        raise Exception(f"Failed to upload file to Vercel Blob Storage: {response.status_code} - {response.text}")
+    async with aiohttp.ClientSession() as session:
+        async with session.put(f"https://blob.vercel-storage.com/{path}", headers=headers, data=data) as response:
+            if response.status == 200:
+                return await response.json()["url"]
+            else:
+                error_text = await response.text()
+                logger.error(f"Failed to upload file to Vercel Blob Storage: {error_text}")
+                raise Exception(f"Failed to upload file to Vercel Blob Storage: {response.status} - {error_text}")
 
 @app.route('/', methods=['GET'])
-def home():
+async def home():
     return jsonify({"status": "Server is running"}), 200
 
 @app.route('/generate-audio-book', methods=['POST'])
-def generate_audio_book():
+async def generate_audio_book():
     data = request.json
     book_title = data.get('title')
     book_author = data.get('author')
@@ -78,11 +80,10 @@ def generate_audio_book():
 
         # Инициализация клиента Anthropic с использованием API-ключа
         client = anthropic.Anthropic(
-                # defaults to os.environ.get("ANTHROPIC_API_KEY")
-                api_key=ANTHROPIC_API_KEY,
-            )
+            api_key=ANTHROPIC_API_KEY,
+        )
         message = client.messages.create(
-            model="claude-3-haiku-20240307",
+            model="claude-3-5-sonnet-20240620",
             max_tokens=4096,
             temperature=1,
             system=system_message,
@@ -112,9 +113,9 @@ def generate_audio_book():
             return jsonify({"error": "Unable to generate summary for the given book."}), 400
 
         # Генерация аудио на основе текста
-        audio_content = generate_audio(summary_text, "en-US-GuyNeural")
+        audio_content = await generate_audio(summary_text, "en-US-GuyNeural")
         filename = secure_filename(f"{title}_{author}.mp3")
-        file_url = upload_to_vercel_blob(filename, audio_content)
+        file_url = await upload_to_vercel_blob(filename, audio_content)
 
         # Сохранение данных в базу данных, включая название книги и автора
         new_file = File(filename=filename, url=file_url, title=title, author=author)
@@ -130,31 +131,23 @@ def generate_audio_book():
         return jsonify({"error": str(e)}), 500
 
 @app.route('/get-file-url/<filename>', methods=['GET'])
-def get_file_url(filename):
+async def get_file_url(filename):
     file = File.query.filter_by(filename=filename).first()
     if file:
         return jsonify({"file_url": file.url}), 200
     else:
         return jsonify({"error": "File not found"}), 404
 
-def generate_audio(text, model):
-    async def run():
-        communicate = edge_tts.Communicate(text, model)
-        with tempfile.NamedTemporaryFile(delete=False) as temp_audio_file:
-            temp_audio_file_name = temp_audio_file.name
-            await communicate.save(temp_audio_file_name)
-        
-        with open(temp_audio_file_name, "rb") as audio_file:
-            audio_content = audio_file.read()
+async def generate_audio(text, model):
+    communicate = edge_tts.Communicate(text, model)
+    with tempfile.NamedTemporaryFile(delete=False) as temp_audio_file:
+        temp_audio_file_name = temp_audio_file.name
+        await communicate.save(temp_audio_file_name)
+    
+    with open(temp_audio_file_name, "rb") as audio_file:
+        audio_content = audio_file.read()
 
-        os.remove(temp_audio_file_name)
-        return audio_content
-
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    audio_content = loop.run_until_complete(run())
-    loop.close()
-
+    os.remove(temp_audio_file_name)
     return audio_content
 
 if __name__ == '__main__':
