@@ -1,17 +1,17 @@
+from quart import Quart, request, jsonify
 import os
 import asyncio
 import json
 import logging
-import aiohttp  # Добавляем aiohttp для асинхронных HTTP-запросов
+import aiohttp
 import tempfile
-from flask import Flask, request, jsonify
 from werkzeug.utils import secure_filename
 from flask_sqlalchemy import SQLAlchemy
 from datetime import datetime
 import edge_tts
 import anthropic
 
-app = Flask(__name__)
+app = Quart(__name__)
 
 # Настройка логирования
 logging.basicConfig(level=logging.DEBUG)
@@ -54,7 +54,7 @@ async def upload_to_vercel_blob(path, data):
     async with aiohttp.ClientSession() as session:
         async with session.put(f"https://blob.vercel-storage.com/{path}", headers=headers, data=data) as response:
             if response.status == 200:
-                return await response.json()["url"]
+                return (await response.json())["url"]
             else:
                 error_text = await response.text()
                 logger.error(f"Failed to upload file to Vercel Blob Storage: {error_text}")
@@ -66,7 +66,7 @@ async def home():
 
 @app.route('/generate-audio-book', methods=['POST'])
 async def generate_audio_book():
-    data = request.json
+    data = await request.json
     book_title = data.get('title')
     book_author = data.get('author')
 
