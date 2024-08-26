@@ -1,10 +1,13 @@
 fastapi
-uvicorn
+flask[async]
 aiohttp
+python-telegram-bot
+pydantic
+requests
 sqlalchemy
 psycopg2-binary
 python-dotenv
 edge-tts
-pydantic
+werkzeug
+flask_sqlalchemy
 anthropic
-python-telegram-bot

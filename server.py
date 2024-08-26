@@ -1,17 +1,17 @@
-from quart import Quart, request, jsonify
 import os
 import asyncio
 import json
 import logging
 import aiohttp
 import tempfile
+from flask import Flask, request, jsonify
 from werkzeug.utils import secure_filename
 from flask_sqlalchemy import SQLAlchemy
 from datetime import datetime
 import edge_tts
 import anthropic
 
-app = Quart(__name__)
+app = Flask(__name__)
 
 # Настройка логирования
 logging.basicConfig(level=logging.DEBUG)
@@ -19,10 +19,10 @@ logger = logging.getLogger(__name__)
 app.config['DEBUG'] = True
 
 # Настройка Vercel Blob Storage
-BLOB_READ_WRITE_TOKEN = "vercel_blob_rw_cMu8v3vHQAN14ESY_SBU40vPpLMnSRWD0sHHA9Ug212BCGO"
+BLOB_READ_WRITE_TOKEN = os.environ.get("BLOB_READ_WRITE_TOKEN")
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
-# Настройка базы данных
 
+# Настройка базы данных
 app.config['SQLALCHEMY_DATABASE_URI'] = "postgresql://default:TK1fxnp7NZOh@ep-little-poetry-a2krqpco.eu-central-1.aws.neon.tech:5432/verceldb?sslmode=require"
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
@@ -49,7 +49,6 @@ async def upload_to_vercel_blob(path, data):
         "Authorization": f"Bearer {BLOB_READ_WRITE_TOKEN}",
         "Content-Type": "application/octet-stream",
         "x-api-version": "7",
-        "x-content-type": "application/octet-stream"
     }
     async with aiohttp.ClientSession() as session:
         async with session.put(f"https://blob.vercel-storage.com/{path}", headers=headers, data=data) as response:
@@ -79,9 +78,7 @@ async def generate_audio_book():
             system_message = file.read()
 
         # Инициализация клиента Anthropic с использованием API-ключа
-        client = anthropic.Anthropic(
-            api_key=ANTHROPIC_API_KEY,
-        )
+        client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
         message = client.messages.create(
             model="claude-3-5-sonnet-20240620",
             max_tokens=4096,
@@ -103,22 +100,18 @@ async def generate_audio_book():
         raw_text = message.content[0].text
         summary_data = json.loads(raw_text, strict=False)
 
-        determinable = summary_data.get('determinable')
-        summary_possible = summary_data.get('summary_possible')
-        title = summary_data.get('title')
-        author = summary_data.get('author')
-        summary_text = summary_data.get('summary_text')
-
-        if not summary_possible:
+        if not summary_data.get('summary_possible'):
             return jsonify({"error": "Unable to generate summary for the given book."}), 400
+
+        summary_text = summary_data.get('summary_text')
 
         # Генерация аудио на основе текста
         audio_content = await generate_audio(summary_text, "en-US-GuyNeural")
-        filename = secure_filename(f"{title}_{author}.mp3")
+        filename = secure_filename(f"{book_title}_{book_author}.mp3")
         file_url = await upload_to_vercel_blob(filename, audio_content)
 
         # Сохранение данных в базу данных, включая название книги и автора
-        new_file = File(filename=filename, url=file_url, title=title, author=author)
+        new_file = File(filename=filename, url=file_url, title=book_title, author=book_author)
         db.session.add(new_file)
         db.session.commit()
 
