@@ -81,7 +81,7 @@ async def generate_audio_book():
         client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
         # Добавляем timeout для выполнения запроса
-        timeout_seconds = 60  # Увеличьте таймаут, если это возможно
+        timeout_seconds = 30  # Увеличьте таймаут, если это возможно
 
         message = await asyncio.wait_for(
             asyncio.to_thread(
