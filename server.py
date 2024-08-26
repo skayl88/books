@@ -65,7 +65,7 @@ async def home():
 
 @app.route('/generate-audio-book', methods=['POST'])
 async def generate_audio_book():
-    data = request.get_json()  # Используем синхронный метод для получения данных
+    data = request.get_json()  # Синхронное получение данных
     book_title = data.get('title')
     book_author = data.get('author')
 
@@ -79,22 +79,30 @@ async def generate_audio_book():
 
         # Инициализация клиента Anthropic с использованием API-ключа
         client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-        message = client.messages.create(
-            model="claude-3-5-sonnet-20240620",
-            max_tokens=4096,
-            temperature=1,
-            system=system_message,
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": f"{book_title}"
-                        }
-                    ]
-                }
-            ]
+
+        # Добавляем timeout для выполнения запроса
+        timeout_seconds = 60  # Увеличьте таймаут, если это возможно
+
+        message = await asyncio.wait_for(
+            asyncio.to_thread(
+                client.messages.create,
+                model="claude-3-haiku-20240307",
+                max_tokens=4096,
+                temperature=1,
+                system=system_message,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": f"{book_title}"
+                            }
+                        ]
+                    }
+                ]
+            ),
+            timeout=timeout_seconds
         )
 
         raw_text = message.content[0].text
@@ -118,6 +126,10 @@ async def generate_audio_book():
         logger.debug(f"Audio generated and saved: {filename}")
 
         return jsonify({"file_url": file_url, "summary_file": summary_text}), 201
+
+    except asyncio.TimeoutError:
+        logger.error(f"Timeout error: Failed to get response from Anthropic within {timeout_seconds} seconds")
+        return jsonify({"error": f"Request to Anthropic API timed out after {timeout_seconds} seconds"}), 504
 
     except Exception as e:
         logger.error(f"Error generating audio book: {e}")
