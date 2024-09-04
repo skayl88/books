@@ -16,9 +16,9 @@ load_dotenv()
 
 # Настройка логирования
 logging.basicConfig(
-    level=logging.DEBUG,  # Устанавливаем уровень логирования на DEBUG для вывода всех сообщений
-    format="%(asctime)s - %(name)s - %(levellevelname)s - %(message)s",  # Формат логов
-    handlers=[logging.StreamHandler()]  # Добавляем обработчик для вывода на консоль
+    level=logging.DEBUG,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    handlers=[logging.StreamHandler()]
 )
 logger = logging.getLogger(__name__)
 
@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 app = Quart(__name__)
 
 # Инициализация клиента Redis
-KV_URL = os.getenv("REDIS_URL")  # URL для Redis из .env
+KV_URL = os.getenv("REDIS_URL")  # URL для Redis из переменных окружения
 redis_client = redis.StrictRedis.from_url(KV_URL)
 
 # Токены из переменных окружения
@@ -71,7 +71,7 @@ async def generate_audio_book_async(task_id, query):
         query_content = f"Please summarize the following query: {query}."
         message = await asyncio.to_thread(
             anthropic_client.messages.create,
-            model="claude-3-5-sonnet-20240620",
+            model="claude-3-haiku-20240307",
             max_tokens=4096,
             temperature=1,
             system=system_message,
