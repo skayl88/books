@@ -100,7 +100,7 @@ async def generate_audio_book(body):
         
         message = await asyncio.to_thread(
             anthropic_client.messages.create,
-            model="claude-3-haiku-20240307",
+            model="claude-3-5-sonnet-20240620",
             max_tokens=4096,
             temperature=1,
             system=system_message,
