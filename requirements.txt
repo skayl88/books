@@ -1,7 +1,5 @@
 fastapi
-flask[async]
 aiohttp
-python-telegram-bot
 pydantic
 requests
 sqlalchemy
@@ -11,3 +9,6 @@ edge-tts
 werkzeug
 flask_sqlalchemy
 anthropic
+aioredis
+quart
+redis
