@@ -14,14 +14,14 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Настройка логирования
-logging.basicConfig(level=logging.INFO)  # Установим уровень логирования как INFO для продакшн среды
+logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
 # Инициализация Quart
 app = Quart(__name__)
 
 # Инициализация синхронного клиента Redis
-KV_URL = os.getenv("REDIS_URL")
+KV_URL = "redis://default:xRSN7rzlNt194fAi1qWUbmLCg3rSFUmy@redis-10632.c323.us-east-1-2.ec2.redns.redis-cloud.com:10632"
 redis_client = redis.StrictRedis.from_url(KV_URL)
 
 BLOB_READ_WRITE_TOKEN = os.getenv("BLOB_READ_WRITE_TOKEN")
@@ -42,6 +42,7 @@ async def upload_to_vercel_blob(path, data):
                 return (await response.json())["url"]
             else:
                 error_text = await response.text()
+                logger.error(f"Failed to upload file to Vercel Blob Storage: {error_text}")
                 raise Exception(f"Failed to upload file to Vercel Blob Storage: {response.status} - {error_text}")
 
 # Функция генерации аудиофайла из текста
@@ -95,26 +96,31 @@ async def generate_audio_book(body):
         except Exception as e:
             return {"error": "Failed to load system message"}, 500
 
-        # Генерация текста через Anthropic
+        # Генерация текста через Anthropic с таймаутом в 2 минуты
         query_content = f"Please summarize the following query: {query}."
-        
-        message = await asyncio.to_thread(
-            anthropic_client.messages.create,
-            model="claude-3-5-sonnet-20240620",
-            max_tokens=4096,
-            temperature=1,
-            system=system_message,
-            messages=[{"role": "user", "content": query_content}]
-        )
 
-        # Проверка формата ответа
+        try:
+            message = await asyncio.wait_for(
+                asyncio.to_thread(
+                    anthropic_client.messages.create,
+                    model="claude-3-5-sonnet-20240620",
+                    max_tokens=4096,
+                    temperature=1,
+                    system=system_message,  # Используем системное сообщение
+                    messages=[{"role": "user", "content": query_content}]
+                ),
+                timeout=120  # Увеличенный таймаут (2 минуты)
+            )
+        except asyncio.TimeoutError:
+            return {"error": "Request to Anthropic API timed out"}, 504
+
+        # Проверяем формат ответа от API
         if not isinstance(message.content, list) or len(message.content) == 0:
             return {"error": "Invalid response from API"}, 500
 
         raw_text = message.content[0].text
         response_data = json.loads(raw_text, strict=False)
-
-        # Проверка ключевых полей
+        # Проверяем ключевые поля в ответе
         if not response_data.get('determinable') or not response_data.get('summary_possible'):
             return {
                 "error": "Summary could not be generated for the given query",
@@ -148,15 +154,9 @@ async def generate_audio_book(body):
 
 @app.route('/generate-audio-book', methods=['POST'])
 async def handle_request():
-    body = await request.get_json()
+    body = await request.get_json()  # Получаем тело запроса как JSON
     response_data, status_code = await generate_audio_book(body)
     return jsonify(response_data), status_code
 
-# Это основной обработчик, который запускается Vercel
-@app.route('/', methods=['GET'])
-async def index():
-    return jsonify({"status": "Server is running"}), 200
-
-# Это для локальной разработки
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000)
+    app.run(debug=True, host='0.0.0.0', port=5000)
