@@ -12,3 +12,4 @@ anthropic
 aioredis
 quart
 redis
+uuid4

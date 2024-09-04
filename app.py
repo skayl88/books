@@ -15,13 +15,17 @@ from uuid import uuid4
 load_dotenv()
 
 # Настройка логирования
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.DEBUG,  # Устанавливаем уровень логирования на DEBUG для вывода всех сообщений
+    format="%(asctime)s - %(name)s - %(levellevelname)s - %(message)s",  # Формат логов
+    handlers=[logging.StreamHandler()]  # Добавляем обработчик для вывода на консоль
+)
 logger = logging.getLogger(__name__)
 
 # Инициализация Quart
 app = Quart(__name__)
 
-# Инициализация синхронного клиента Redis
+# Инициализация клиента Redis
 KV_URL = os.getenv("REDIS_URL")  # URL для Redis из .env
 redis_client = redis.StrictRedis.from_url(KV_URL)
 
@@ -51,6 +55,8 @@ async def upload_to_vercel_blob(path, data):
 # Асинхронная функция для генерации аудиокниги
 async def generate_audio_book_async(task_id, query):
     try:
+        logger.info(f"Starting task {task_id} for query: {query}")
+        
         # Чтение системного сообщения из файла
         system_message = ""
         try:
@@ -65,15 +71,18 @@ async def generate_audio_book_async(task_id, query):
         query_content = f"Please summarize the following query: {query}."
         message = await asyncio.to_thread(
             anthropic_client.messages.create,
-            model="claude-3-haiku-20240307",
+            model="claude-3-5-sonnet-20240620",
             max_tokens=4096,
             temperature=1,
             system=system_message,
             messages=[{"role": "user", "content": query_content}]
         )
 
+        logger.info(f"Received response from Anthropic API for task {task_id}")
+
         # Обработка текста из ответа
         if not isinstance(message.content, list) or len(message.content) == 0:
+            logger.error(f"Invalid response from API for task {task_id}")
             redis_client.set(task_id, json.dumps({"status": "failed", "error": "Invalid response from API"}), ex=86400)
             return
 
@@ -82,6 +91,7 @@ async def generate_audio_book_async(task_id, query):
 
         # Проверяем ключевые поля в ответе
         if not response_data.get('determinable') or not response_data.get('summary_possible'):
+            logger.error(f"Summary could not be generated for task {task_id}")
             redis_client.set(task_id, json.dumps({
                 "status": "failed",
                 "error": "Summary could not be generated",
@@ -96,21 +106,28 @@ async def generate_audio_book_async(task_id, query):
         title = response_data.get('title')
         author = response_data.get('author')
 
+        logger.info(f"Processing response for task {task_id}")
+
         # Генерация аудио
         audio_content = await generate_audio(summary_text)
+        logger.info(f"Audio generated successfully for task {task_id}")
 
         # Сохранение аудиофайла в Blob Storage
         filename = f"{query.lower().replace(' ', '_')}.mp3"
         file_url = await upload_to_vercel_blob(filename, audio_content)
 
+        logger.info(f"Audio uploaded successfully to Vercel Blob Storage for task {task_id}")
+
         # Сохраняем результат в Redis
-        redis_client.set(task_id, json.dumps({
+        book_data = json.dumps({
             "status": "completed",
             "file_url": file_url,
             "summary_text": summary_text,
             "title": title,
             "author": author
-        }), ex=86400)
+        })
+        redis_client.set(query, book_data, ex=86400)  # Кэшируем результат
+        redis_client.set(task_id, book_data, ex=86400)
 
         logger.info(f"Task {task_id} completed successfully.")
 
@@ -140,6 +157,12 @@ async def generate_audio_book():
     if not query:
         return jsonify({"error": "Please provide a book title or author"}), 400
 
+    # Проверяем наличие книги в кэше Redis по query
+    cached_result = redis_client.get(query)
+    if cached_result:
+        logger.info(f"Returning cached result for query: {query}")
+        return jsonify(json.loads(cached_result)), 200
+
     # Генерация уникального task_id
     task_id = str(uuid4())
 
@@ -148,6 +171,7 @@ async def generate_audio_book():
 
     # Запускаем задачу в фоне
     asyncio.create_task(generate_audio_book_async(task_id, query))
+    logger.info(f"Task {task_id} started and set to 'pending'")
 
     # Возвращаем task_id клиенту сразу
     return jsonify({"task_id": task_id, "status": "pending"}), 202
