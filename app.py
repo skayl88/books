@@ -9,24 +9,27 @@ from quart import Quart, request, jsonify
 from edge_tts import Communicate
 import anthropic
 from dotenv import load_dotenv
+from uuid import uuid4
 
 # Загружаем переменные окружения из .env файла
 load_dotenv()
 
 # Настройка логирования
-logging.basicConfig(level=logging.DEBUG)
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Инициализация Quart
 app = Quart(__name__)
 
 # Инициализация синхронного клиента Redis
-KV_URL = "redis://default:xRSN7rzlNt194fAi1qWUbmLCg3rSFUmy@redis-10632.c323.us-east-1-2.ec2.redns.redis-cloud.com:10632"
+KV_URL = os.getenv("REDIS_URL")  # URL для Redis из .env
 redis_client = redis.StrictRedis.from_url(KV_URL)
 
+# Токены из переменных окружения
 BLOB_READ_WRITE_TOKEN = os.getenv("BLOB_READ_WRITE_TOKEN")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 
+# Инициализация клиента Anthropic
 anthropic_client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
 # Асинхронная функция для загрузки файла в Vercel Blob Storage
@@ -45,90 +48,49 @@ async def upload_to_vercel_blob(path, data):
                 logger.error(f"Failed to upload file to Vercel Blob Storage: {error_text}")
                 raise Exception(f"Failed to upload file to Vercel Blob Storage: {response.status} - {error_text}")
 
-# Функция генерации аудиофайла из текста
-async def generate_audio(text, model="en-US-GuyNeural"):
-    communicate = Communicate(text, model)
-    with tempfile.NamedTemporaryFile(delete=False) as temp_audio_file:
-        temp_audio_file_name = temp_audio_file.name
-        await communicate.save(temp_audio_file_name)
-
-    with open(temp_audio_file_name, "rb") as audio_file:
-        audio_content = audio_file.read()
-
-    os.remove(temp_audio_file_name)
-    return audio_content
-
-# Кэширование в Redis (синхронное)
-def cache_set(key, value, ttl=86400):
-    redis_client.setex(key, ttl, json.dumps(value))
-
-def cache_get(key):
-    data = redis_client.get(key)
-    if data:
-        return json.loads(data)
-    return None
-
-# Функция для генерации ключа для кэша
-def generate_cache_key(query):
-    return f"query:{query.lower().replace(' ', '_')}"
-
-# Основная функция обработки запросов с кэшированием
-async def generate_audio_book(body):
+# Асинхронная функция для генерации аудиокниги
+async def generate_audio_book_async(task_id, query):
     try:
-        query = body.get('query')
-
-        if not query:
-            return {"error": "Please provide a book title or author"}, 400
-
-        # Генерация ключа для кэша
-        cache_key = generate_cache_key(query)
-
-        # Проверяем кэш для текста и аудиофайла
-        cached_data = cache_get(cache_key)
-        if cached_data:
-            return {"file_url": cached_data['file_url'], "summary_text": cached_data['summary_text']}, 200
-
-        # Чтение системного сообщения из текстового файла
+        # Чтение системного сообщения из файла
         system_message = ""
         try:
             with open('system_message.txt', 'r', encoding='utf-8') as file:
                 system_message = file.read()
         except Exception as e:
-            return {"error": "Failed to load system message"}, 500
+            logger.error(f"Failed to load system message: {e}")
+            redis_client.set(task_id, json.dumps({"status": "failed", "error": "System message not loaded"}), ex=86400)
+            return
 
-        # Генерация текста через Anthropic с таймаутом в 2 минуты
+        # Запрос к Anthropic API для получения текста
         query_content = f"Please summarize the following query: {query}."
+        message = await asyncio.to_thread(
+            anthropic_client.messages.create,
+            model="claude-3-haiku-20240307",
+            max_tokens=4096,
+            temperature=1,
+            system=system_message,
+            messages=[{"role": "user", "content": query_content}]
+        )
 
-        try:
-            message = await asyncio.wait_for(
-                asyncio.to_thread(
-                    anthropic_client.messages.create,
-                    model="claude-3-5-sonnet-20240620",
-                    max_tokens=4096,
-                    temperature=1,
-                    system=system_message,  # Используем системное сообщение
-                    messages=[{"role": "user", "content": query_content}]
-                ),
-                timeout=120  # Увеличенный таймаут (2 минуты)
-            )
-        except asyncio.TimeoutError:
-            return {"error": "Request to Anthropic API timed out"}, 504
-
-        # Проверяем формат ответа от API
+        # Обработка текста из ответа
         if not isinstance(message.content, list) or len(message.content) == 0:
-            return {"error": "Invalid response from API"}, 500
+            redis_client.set(task_id, json.dumps({"status": "failed", "error": "Invalid response from API"}), ex=86400)
+            return
 
         raw_text = message.content[0].text
         response_data = json.loads(raw_text, strict=False)
+
         # Проверяем ключевые поля в ответе
         if not response_data.get('determinable') or not response_data.get('summary_possible'):
-            return {
-                "error": "Summary could not be generated for the given query",
+            redis_client.set(task_id, json.dumps({
+                "status": "failed",
+                "error": "Summary could not be generated",
                 "determinable": response_data.get('determinable'),
                 "summary_possible": response_data.get('summary_possible'),
                 "title": response_data.get('title'),
                 "author": response_data.get('author')
-            }, 400
+            }), ex=86400)
+            return
 
         summary_text = response_data.get('summary_text')
         title = response_data.get('title')
@@ -141,22 +103,63 @@ async def generate_audio_book(body):
         filename = f"{query.lower().replace(' ', '_')}.mp3"
         file_url = await upload_to_vercel_blob(filename, audio_content)
 
-        # Сохраняем данные в кэш
-        cache_set(cache_key, {
+        # Сохраняем результат в Redis
+        redis_client.set(task_id, json.dumps({
+            "status": "completed",
             "file_url": file_url,
-            "summary_text": summary_text
-        })
+            "summary_text": summary_text,
+            "title": title,
+            "author": author
+        }), ex=86400)
 
-        return {"file_url": file_url, "summary_text": summary_text, "title": title, "author": author}, 201
+        logger.info(f"Task {task_id} completed successfully.")
 
     except Exception as e:
-        return {"error": str(e)}, 500
+        redis_client.set(task_id, json.dumps({"status": "failed", "error": str(e)}), ex=86400)
+        logger.error(f"Task {task_id} failed with error: {e}")
 
+# Функция для генерации аудиофайла из текста
+async def generate_audio(text, model="en-US-GuyNeural"):
+    communicate = Communicate(text, model)
+    with tempfile.NamedTemporaryFile(delete=False) as temp_audio_file:
+        temp_audio_file_name = temp_audio_file.name
+        await communicate.save(temp_audio_file_name)
+
+    with open(temp_audio_file_name, "rb") as audio_file:
+        audio_content = audio_file.read()
+
+    os.remove(temp_audio_file_name)
+    return audio_content
+
+# Роут для создания задачи генерации аудиокниги
 @app.route('/generate-audio-book', methods=['POST'])
-async def handle_request():
-    body = await request.get_json()  # Получаем тело запроса как JSON
-    response_data, status_code = await generate_audio_book(body)
-    return jsonify(response_data), status_code
+async def generate_audio_book():
+    body = await request.get_json()
+    query = body.get('query')
+
+    if not query:
+        return jsonify({"error": "Please provide a book title or author"}), 400
+
+    # Генерация уникального task_id
+    task_id = str(uuid4())
+
+    # Сохраняем задачу с начальным статусом
+    redis_client.set(task_id, json.dumps({"status": "pending"}), ex=86400)
+
+    # Запускаем задачу в фоне
+    asyncio.create_task(generate_audio_book_async(task_id, query))
+
+    # Возвращаем task_id клиенту сразу
+    return jsonify({"task_id": task_id, "status": "pending"}), 202
+
+# Роут для проверки статуса задачи
+@app.route('/task-status/<task_id>', methods=['GET'])
+async def check_task_status(task_id):
+    task_status = redis_client.get(task_id)
+    if task_status:
+        return jsonify(json.loads(task_status)), 200
+    else:
+        return jsonify({"error": "Task not found"}), 404
 
 if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=5000)
+    app.run(debug=False, host='0.0.0.0', port=int(os.getenv("PORT", 5000)))
