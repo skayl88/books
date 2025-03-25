@@ -71,7 +71,7 @@ async def generate_audio_book_async(task_id, query):
         query_content = f"Please summarize the following query: {query}."
         message = await asyncio.to_thread(
             anthropic_client.messages.create,
-            model="claude-3-5-sonnet-20241022",
+            model="claude-3-5-haiku-20241022",
             max_tokens=4096,
             temperature=1,
             system=system_message,
