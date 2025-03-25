@@ -43,9 +43,11 @@ async def upload_to_vercel_blob(path, data):
         "Content-Type": "application/octet-stream",
         "x-api-version": "7",
     }
-    async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=60)) as session:  # Тайм-аут 1 минута
+    logger.debug(f"Uploading file to Vercel Blob Storage at path: {path}")
+    async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=60)) as session:
         async with session.put(f"https://blob.vercel-storage.com/{path}", headers=headers, data=data) as response:
             if response.status == 200:
+                logger.info(f"File successfully uploaded to Vercel Blob Storage: {path}")
                 return (await response.json())["url"]
             else:
                 error_text = await response.text()
@@ -81,12 +83,13 @@ async def generate_audio_book_async(task_id, query):
                 ),
                 timeout=60  # 1 минута
             )
+            logger.debug(f"Received response from Anthropic API: {message}")
         except asyncio.TimeoutError:
             logger.error(f"Anthropic API call timed out for task {task_id}")
             redis_client.set(task_id, json.dumps({"status": "failed", "error": "API call timeout"}), ex=86400)
             return
 
-        logger.info(f"Received response from Anthropic API for task {task_id}")
+        logger.info(f"Processing response from Anthropic API for task {task_id}")
 
         # Обработка текста из ответа
         if not isinstance(message.content, list) or len(message.content) == 0:
@@ -113,17 +116,16 @@ async def generate_audio_book_async(task_id, query):
         title = response_data.get('title')
         author = response_data.get('author')
 
-        logger.info(f"Processing response for task {task_id}")
+        logger.info(f"Summary successfully generated for task {task_id}")
 
         # Генерация аудио
         try:
             audio_content = await asyncio.wait_for(generate_audio(summary_text), timeout=60)  # 1 минута
+            logger.debug(f"Audio generated successfully for task {task_id}")
         except asyncio.TimeoutError:
             logger.error(f"Audio generation timed out for task {task_id}")
             redis_client.set(task_id, json.dumps({"status": "failed", "error": "Audio generation timeout"}), ex=86400)
             return
-
-        logger.info(f"Audio generated successfully for task {task_id}")
 
         # Сохранение аудиофайла в Blob Storage
         filename = f"{query.lower().replace(' ', '_')}.mp3"
@@ -150,6 +152,7 @@ async def generate_audio_book_async(task_id, query):
 
 # Функция для генерации аудиофайла из текста
 async def generate_audio(text, model="en-US-GuyNeural"):
+    logger.debug(f"Starting audio generation with model: {model}")
     communicate = Communicate(text, model)
     with tempfile.NamedTemporaryFile(delete=False) as temp_audio_file:
         temp_audio_file_name = temp_audio_file.name
@@ -159,6 +162,7 @@ async def generate_audio(text, model="en-US-GuyNeural"):
         audio_content = audio_file.read()
 
     os.remove(temp_audio_file_name)
+    logger.debug(f"Audio generation completed for model: {model}")
     return audio_content
 
 # Роут для создания задачи генерации аудиокниги
@@ -168,6 +172,7 @@ async def generate_audio_book():
     query = body.get('query')
 
     if not query:
+        logger.warning("Received request without query parameter")
         return jsonify({"error": "Please provide a book title or author"}), 400
 
     # Проверяем наличие книги в кэше Redis по query
@@ -192,11 +197,14 @@ async def generate_audio_book():
 # Роут для проверки статуса задачи
 @app.route('/task-status/<task_id>', methods=['GET'])
 async def check_task_status(task_id):
+    logger.debug(f"Checking status for task_id: {task_id}")
     task_status = redis_client.get(task_id)
     if task_status:
         return jsonify(json.loads(task_status)), 200
     else:
+        logger.warning(f"Task not found: {task_id}")
         return jsonify({"error": "Task not found"}), 404
 
 if __name__ == '__main__':
+    logger.info("Starting Quart application")
     app.run(debug=False, host='0.0.0.0', port=int(os.getenv("PORT", 5000)))
