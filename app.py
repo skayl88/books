@@ -26,8 +26,8 @@ logger = logging.getLogger(__name__)
 app = Quart(__name__)
 
 # Инициализация клиента Redis
-KV_URL = os.getenv("REDIS_URL")  # URL для Redis из переменных окружения
-redis_client = redis.StrictRedis.from_url(KV_URL, socket_timeout=10, socket_connect_timeout=5)
+KV_URL = os.getenv("REDIS")  # URL для Redis из переменных окружения
+redis_client = redis.StrictRedis.from_url(KV_URL, socket_timeout=60, socket_connect_timeout=15)
 
 # Токены из переменных окружения
 BLOB_READ_WRITE_TOKEN = os.getenv("BLOB_READ_WRITE_TOKEN")
