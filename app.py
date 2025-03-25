@@ -27,7 +27,7 @@ app = Quart(__name__)
 
 # Инициализация клиента Redis
 KV_URL = os.getenv("REDIS_URL")  # URL для Redis из переменных окружения
-redis_client = redis.StrictRedis.from_url(KV_URL)
+redis_client = redis.StrictRedis.from_url(KV_URL, socket_timeout=10, socket_connect_timeout=5)
 
 # Токены из переменных окружения
 BLOB_READ_WRITE_TOKEN = os.getenv("BLOB_READ_WRITE_TOKEN")
@@ -43,7 +43,7 @@ async def upload_to_vercel_blob(path, data):
         "Content-Type": "application/octet-stream",
         "x-api-version": "7",
     }
-    async with aiohttp.ClientSession() as session:
+    async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=60)) as session:  # Тайм-аут 1 минута
         async with session.put(f"https://blob.vercel-storage.com/{path}", headers=headers, data=data) as response:
             if response.status == 200:
                 return (await response.json())["url"]
@@ -56,7 +56,7 @@ async def upload_to_vercel_blob(path, data):
 async def generate_audio_book_async(task_id, query):
     try:
         logger.info(f"Starting task {task_id} for query: {query}")
-        
+
         # Чтение системного сообщения из файла
         system_message = ""
         try:
@@ -69,14 +69,22 @@ async def generate_audio_book_async(task_id, query):
 
         # Запрос к Anthropic API для получения текста
         query_content = f"Please summarize the following query: {query}."
-        message = await asyncio.to_thread(
-            anthropic_client.messages.create,
-            model="claude-3-5-haiku-20241022",
-            max_tokens=4096,
-            temperature=1,
-            system=system_message,
-            messages=[{"role": "user", "content": query_content}]
-        )
+        try:
+            message = await asyncio.wait_for(
+                asyncio.to_thread(
+                    anthropic_client.messages.create,
+                    model="claude-3-5-haiku-20241022",
+                    max_tokens=4096,
+                    temperature=1,
+                    system=system_message,
+                    messages=[{"role": "user", "content": query_content}]
+                ),
+                timeout=60  # 1 минута
+            )
+        except asyncio.TimeoutError:
+            logger.error(f"Anthropic API call timed out for task {task_id}")
+            redis_client.set(task_id, json.dumps({"status": "failed", "error": "API call timeout"}), ex=86400)
+            return
 
         logger.info(f"Received response from Anthropic API for task {task_id}")
 
@@ -89,7 +97,6 @@ async def generate_audio_book_async(task_id, query):
         raw_text = message.content[0].text
         response_data = json.loads(raw_text, strict=False)
 
-        # Проверяем ключевые поля в ответе
         if not response_data.get('determinable') or not response_data.get('summary_possible'):
             logger.error(f"Summary could not be generated for task {task_id}")
             redis_client.set(task_id, json.dumps({
@@ -109,7 +116,13 @@ async def generate_audio_book_async(task_id, query):
         logger.info(f"Processing response for task {task_id}")
 
         # Генерация аудио
-        audio_content = await generate_audio(summary_text)
+        try:
+            audio_content = await asyncio.wait_for(generate_audio(summary_text), timeout=60)  # 1 минута
+        except asyncio.TimeoutError:
+            logger.error(f"Audio generation timed out for task {task_id}")
+            redis_client.set(task_id, json.dumps({"status": "failed", "error": "Audio generation timeout"}), ex=86400)
+            return
+
         logger.info(f"Audio generated successfully for task {task_id}")
 
         # Сохранение аудиофайла в Blob Storage
