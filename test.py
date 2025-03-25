@@ -1,6 +1,6 @@
 import redis
 
-KV_URL = "redis://default:3wbhvlZK8BFGZVdkH3wQKC4B3nqLRcm0@redis-11566.c89.us-east-1-3.ec2.redns.redis-cloud.com:11566"
+KV_URL = ""
 
 def test_redis_connection():
     try:
