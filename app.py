@@ -355,9 +355,20 @@ def safe_json_loads(json_str):
 # Запуск асинхронных задач при запуске приложения
 @app.before_serving
 async def startup():
-    # Подключаем диспетчер к боту и запускаем поллинг
-    await dp.start_polling(bot)
-    logger.info("Telegram bot started")
+    # На Vercel мы не используем поллинг, а настраиваем вебхук
+    try:
+        # Проверяем, работаем ли мы на Vercel
+        vercel_url = os.getenv("VERCEL_URL")
+        if vercel_url:
+            webhook_url = f"https://{vercel_url}/webhook"
+            await bot.set_webhook(url=webhook_url)
+            logger.info(f"Вебхук автоматически установлен на {webhook_url}")
+        else:
+            logger.info("Не на Vercel. Вебхук нужно установить вручную через /set_webhook")
+    except Exception as e:
+        logger.error(f"Ошибка при автоматической настройке вебхука: {e}")
+    
+    logger.info("Приложение запущено")
 
 # Завершение работы приложения
 @app.after_serving
@@ -366,14 +377,58 @@ async def shutdown():
     session = await bot.get_session()
     if session:
         await session.close()
-    # Останавливаем диспетчер
-    await dp.stop_polling()
     logger.info("Telegram bot stopped")
 
 # Маршрут Quart для проверки работоспособности
 @app.route("/")
 async def index():
     return jsonify({"status": "ok"})
+
+# Обработчик вебхуков от Telegram
+@app.route("/webhook", methods=["POST"])
+async def webhook():
+    try:
+        data = await request.get_data()
+        update = types.Update(**json.loads(data))
+        await dp.feed_update(bot=bot, update=update)
+        return "", 200
+    except Exception as e:
+        logger.error(f"Ошибка при обработке вебхука: {e}")
+        await send_error_to_telegram(f"Ошибка при обработке вебхука: {e}")
+        return jsonify({"error": str(e)}), 500
+
+# Маршрут для установки вебхука
+@app.route("/set_webhook", methods=["GET"])
+async def set_webhook():
+    try:
+        # Получаем URL вебхука из запроса или конструируем из заголовка Host
+        webhook_url = request.args.get("url")
+        if not webhook_url:
+            host = request.headers.get("Host")
+            if host:
+                webhook_url = f"https://{host}/webhook"
+            else:
+                return jsonify({"error": "Не удалось определить URL для вебхука. Укажите параметр url."}), 400
+        
+        # Устанавливаем вебхук
+        await bot.set_webhook(url=webhook_url)
+        logger.info(f"Вебхук установлен на {webhook_url}")
+        return jsonify({"status": "ok", "webhook_url": webhook_url})
+    except Exception as e:
+        logger.error(f"Ошибка при установке вебхука: {e}")
+        return jsonify({"error": str(e)}), 500
+
+# Маршрут для удаления вебхука
+@app.route("/remove_webhook", methods=["GET"])
+async def remove_webhook():
+    try:
+        # Удаляем вебхук
+        await bot.delete_webhook()
+        logger.info("Вебхук удален")
+        return jsonify({"status": "ok"})
+    except Exception as e:
+        logger.error(f"Ошибка при удалении вебхука: {e}")
+        return jsonify({"error": str(e)}), 500
 
 # Маршрут для запуска задачи генерации аудиокниги
 @app.route("/generate", methods=["POST"])
@@ -461,3 +516,7 @@ async def check_status():
 # Основная функция для запуска приложения
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 8000)))
+
+# Для Vercel serverless функции
+# Не удаляйте эту переменную, она необходима для работы на Vercel
+app = app
