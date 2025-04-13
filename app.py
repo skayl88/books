@@ -12,7 +12,8 @@ import anthropic
 from dotenv import load_dotenv
 from uuid import uuid4
 from aiogram import Bot, Dispatcher, types
-from aiogram.utils import executor
+from aiogram.enums import ParseMode
+from aiogram.filters import Command
 from httpx import Timeout
 import re, json
 # Загружаем переменные окружения из .env файла
@@ -29,15 +30,26 @@ logger = logging.getLogger(__name__)
 # Инициализация Quart
 app = Quart(__name__)
 
-# Инициализация клиента Redis
-KV_URL = os.getenv("REDIS")
-redis_client = redis.StrictRedis.from_url(KV_URL, socket_timeout=60, socket_connect_timeout=150)
-
 # Токены из переменных окружения
 BLOB_READ_WRITE_TOKEN = os.getenv("BLOB_READ_WRITE_TOKEN")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID")  # ID чата, куда будут отправляться ошибки
+
+# Инициализация Telegram бота и диспетчера (aiogram 3.x)
+bot = Bot(token=TELEGRAM_BOT_TOKEN)
+dp = Dispatcher()
+
+# Функция для отправки ошибок в Telegram
+async def send_error_to_telegram(error_message: str):
+    try:
+        await bot.send_message(ADMIN_CHAT_ID, f"Произошла ошибка: {error_message}")
+    except Exception as e:
+        logger.error(f"Не удалось отправить сообщение об ошибке в Telegram: {e}")
+
+# Инициализация клиента Redis
+KV_URL = os.getenv("REDIS")
+redis_client = redis.StrictRedis.from_url(KV_URL, socket_timeout=60, socket_connect_timeout=150)
 
 # Настройки базы данных
 DB_URL = os.getenv("DATABASE_URL")
@@ -60,22 +72,11 @@ try:
     db_connection.commit()
 except Exception as e:
     logger.error(f"Error initializing database: {e}")
-    # Отправляем ошибку администратору
-    bot.send_message(ADMIN_CHAT_ID, f"Ошибка инициализации базы данных: {e}")
+    # Асинхронную функцию нельзя вызвать здесь напрямую, поэтому только логируем ошибку
 
 # Инициализация клиентов
 http_timeout = Timeout(300.0, connect=300.0)  # 10 секунд общий таймаут, 5 секунд таймаут соединения
 anthropic_client = anthropic.Client(api_key=ANTHROPIC_API_KEY, timeout=http_timeout)
-
-bot = Bot(token=TELEGRAM_BOT_TOKEN)
-dp = Dispatcher(bot)
-
-# Функция для отправки ошибок в Telegram
-async def send_error_to_telegram(error_message: str):
-    try:
-        await bot.send_message(ADMIN_CHAT_ID, f"Произошла ошибка: {error_message}")
-    except Exception as e:
-        logger.error(f"Не удалось отправить сообщение об ошибке в Telegram: {e}")
 
 # Асинхронная функция для загрузки файла в Vercel Blob Storage
 async def upload_to_vercel_blob(path, data):
@@ -235,12 +236,12 @@ async def generate_audio_book_async(task_id, query, use_mock=False):
         # Отправляем уведомление об ошибке
         await send_error_to_telegram(f"Ошибка при генерации аудиокниги для запроса '{query}': {error_message}")
 
-# Telegram бот: обработка сообщений
-@dp.message_handler(commands=['start', 'help'])
+# Регистрация обработчиков сообщений с явным указанием диспетчера (aiogram 3.x)
+@dp.message(Command("start", "help"))
 async def send_welcome(message: types.Message):
     await message.reply("Привет! Отправь мне название книги, и я создам аудиокнигу.")
 
-@dp.message_handler()
+@dp.message()
 async def handle_message(message: types.Message):
     query = message.text.strip()
 
@@ -253,7 +254,7 @@ async def handle_message(message: types.Message):
         if status == "completed":
             await message.reply(f"Ваша аудиокнига готова: {file_url}")
             return
-        elif status == "pending1":
+        elif status == "pending":
             await message.reply("Ваша задача ещё в процессе. Пожалуйста, подождите.")
             return
 
@@ -351,12 +352,112 @@ def safe_json_loads(json_str):
         # Если не удалось извлечь данные, выбрасываем исключение
         raise ValueError("Не удалось распарсить JSON и извлечь необходимые данные")
 
-# Запуск Quart и Telegram-бота
-if __name__ == '__main__':
-    loop = asyncio.get_event_loop()
+# Запуск асинхронных задач при запуске приложения
+@app.before_serving
+async def startup():
+    # Подключаем диспетчер к боту и запускаем поллинг
+    await dp.start_polling(bot)
+    logger.info("Telegram bot started")
 
-    # Запускаем Quart в фоне
-    loop.create_task(app.run_task(debug=False, host='0.0.0.0', port=int(os.getenv("PORT", 5000))))
+# Завершение работы приложения
+@app.after_serving
+async def shutdown():
+    # Закрываем сессию бота
+    session = await bot.get_session()
+    if session:
+        await session.close()
+    # Останавливаем диспетчер
+    await dp.stop_polling()
+    logger.info("Telegram bot stopped")
 
-    # Запускаем Telegram-бота
-    executor.start_polling(dp, skip_updates=True)
+# Маршрут Quart для проверки работоспособности
+@app.route("/")
+async def index():
+    return jsonify({"status": "ok"})
+
+# Маршрут для запуска задачи генерации аудиокниги
+@app.route("/generate", methods=["POST"])
+async def generate_audio_book():
+    try:
+        data = await request.get_json()
+        query = data.get("query")
+        use_mock = data.get("use_mock", False)
+        
+        if not query:
+            return jsonify({"error": "Missing query parameter"}), 400
+
+        # Генерируем уникальный идентификатор задачи
+        task_id = str(uuid4())
+        
+        # Проверяем, есть ли уже такой запрос в базе данных
+        db_cursor.execute("SELECT id, status, file_url FROM books WHERE query = %s", (query,))
+        existing_book = db_cursor.fetchone()
+        
+        if existing_book:
+            book_id, status, file_url = existing_book
+            if status == 'completed' and file_url:
+                return jsonify({
+                    "status": "completed",
+                    "file_url": file_url,
+                    "message": "Аудиокнига уже существует"
+                })
+        
+        # Создаем запись в базе данных
+        db_cursor.execute("""
+            INSERT INTO books (query, status) 
+            VALUES (%s, 'processing')
+            ON CONFLICT (query) DO UPDATE SET status = 'processing'
+            RETURNING id
+        """, (query,))
+        db_connection.commit()
+        
+        # Создаем задачу в фоновом режиме
+        asyncio.create_task(generate_audio_book_async(task_id, query, use_mock))
+        
+        return jsonify({
+            "status": "processing",
+            "task_id": task_id,
+            "message": "Задача на генерацию аудиокниги поставлена в очередь"
+        })
+    
+    except Exception as e:
+        error_message = str(e)
+        logging.error(f"Ошибка при обработке запроса: {error_message}")
+        await send_error_to_telegram(f"Ошибка при обработке веб-запроса: {error_message}")
+        return jsonify({"error": error_message}), 500
+
+# Маршрут для проверки статуса задачи
+@app.route("/status", methods=["GET"])
+async def check_status():
+    query = request.args.get("query")
+    
+    if not query:
+        return jsonify({"error": "Missing query parameter"}), 400
+    
+    db_cursor.execute("SELECT status, file_url, summary_text, title, author FROM books WHERE query = %s", (query,))
+    result = db_cursor.fetchone()
+    
+    if not result:
+        return jsonify({"status": "not_found"}), 404
+    
+    status, file_url, summary_text, title, author = result
+    
+    response = {
+        "status": status,
+    }
+    
+    if status == "completed":
+        response.update({
+            "file_url": file_url,
+            "summary_text": summary_text,
+            "title": title,
+            "author": author
+        })
+    elif status == "failed":
+        response["error"] = summary_text
+    
+    return jsonify(response)
+
+# Основная функция для запуска приложения
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 8000)))
