@@ -408,23 +408,118 @@ async def shutdown():
 # Маршрут Quart для проверки работоспособности
 @app.route("/")
 async def index():
-    return jsonify({"status": "ok"})
+    try:
+        # Проверяем, установлен ли вебхук
+        webhook_info = await bot.get_webhook_info()
+        
+        # Проверяем, работаем ли мы на Vercel
+        vercel_url = os.getenv("VERCEL_URL")
+        expected_webhook = f"https://{vercel_url}/webhook" if vercel_url else None
+        
+        # Информация для отображения в ответе
+        info = {
+            "status": "ok",
+            "webhook": {
+                "current": webhook_info.url,
+                "expected": expected_webhook,
+                "pending_updates": webhook_info.pending_update_count
+            }
+        }
+        
+        # Если вебхук не установлен или установлен неправильно, и мы на Vercel
+        if vercel_url and (not webhook_info.url or webhook_info.url != expected_webhook):
+            # Удаляем старый вебхук
+            await bot.delete_webhook(drop_pending_updates=True)
+            # Устанавливаем новый
+            await bot.set_webhook(url=expected_webhook, drop_pending_updates=True)
+            # Проверяем, что установка прошла успешно
+            new_webhook_info = await bot.get_webhook_info()
+            info["webhook"]["action"] = "updated"
+            info["webhook"]["current"] = new_webhook_info.url
+            logger.info(f"Вебхук обновлен автоматически: {new_webhook_info.url}")
+        
+        return jsonify(info)
+    except Exception as e:
+        logger.error(f"Ошибка при проверке работоспособности: {e}", exc_info=True)
+        return jsonify({"status": "error", "error": str(e)})
 
 # Обработчик вебхуков от Telegram
 @app.route("/webhook", methods=["POST"])
 async def webhook():
     try:
+        # Логируем информацию о входящем запросе
         data = await request.get_data()
-        update_data = json.loads(data)
+        headers = dict(request.headers)
         
-        # Создаем новую задачу для обработки обновления
-        # чтобы избежать проблем с циклом событий
-        asyncio.create_task(process_update(update_data))
+        logger.info(f"Получен вебхук. Заголовки: {headers}")
+        logger.info(f"Получены данные: {data[:200]}...")  # Логируем начало данных
+        
+        try:
+            update_data = json.loads(data)
+            logger.info(f"Данные успешно разобраны как JSON")
+        except json.JSONDecodeError as e:
+            logger.error(f"Не удалось разобрать JSON: {e}")
+            return jsonify({"error": "Invalid JSON data"}), 400
+        
+        # Создаем задачу для асинхронной обработки обновления
+        loop = asyncio.get_event_loop()
+        if not loop.is_closed():
+            asyncio.create_task(process_update(update_data))
+            logger.info("Задача для обработки обновления создана")
+        else:
+            logger.warning("Цикл событий закрыт, обрабатываем обновление напрямую")
+            # Если цикл закрыт, обрабатываем напрямую (не асинхронно)
+            await process_update(update_data)
         
         return "", 200
     except Exception as e:
-        logger.error(f"Ошибка при обработке вебхука: {e}")
-        # Не вызываем send_error_to_telegram здесь, так как это может вызвать ту же ошибку
+        logger.error(f"Ошибка при обработке вебхука: {e}", exc_info=True)
+        return jsonify({"error": str(e)}), 500
+
+# Добавим маршрут для диагностики
+@app.route("/debug", methods=["GET"])
+async def debug_info():
+    try:
+        # Получаем информацию о боте
+        bot_info = await bot.get_me()
+        bot_name = f"@{bot_info.username}" if bot_info.username else bot_info.first_name
+        
+        # Получаем информацию о вебхуке
+        webhook_info = await bot.get_webhook_info()
+        
+        # Проверяем соединение с Redis
+        redis_status = "Работает" if redis_client.ping() else "Не работает"
+        
+        # Проверяем соединение с базой данных
+        try:
+            db_cursor.execute("SELECT 1")
+            db_status = "Работает"
+        except Exception as e:
+            db_status = f"Ошибка: {str(e)}"
+        
+        return jsonify({
+            "bot": {
+                "id": bot_info.id,
+                "name": bot_name,
+                "is_bot": bot_info.is_bot
+            },
+            "webhook": {
+                "url": webhook_info.url,
+                "pending_updates": webhook_info.pending_update_count,
+                "max_connections": webhook_info.max_connections
+            },
+            "connections": {
+                "redis": redis_status,
+                "database": db_status
+            },
+            "environment": {
+                "vercel_url": os.getenv("VERCEL_URL"),
+                "admin_chat_id": ADMIN_CHAT_ID,
+                "python_version": os.sys.version
+            }
+        })
+    except Exception as e:
+        logger.error(f"Ошибка при получении отладочной информации: {e}", exc_info=True)
         return jsonify({"error": str(e)}), 500
 
 # Отдельная функция для обработки обновлений
@@ -433,14 +528,24 @@ async def process_update(update_data):
         # Создаем объект Update из данных
         update = types.Update.model_validate(update_data)
         
+        # Логируем тип обновления для диагностики
+        if update.message:
+            logger.info(f"Обрабатываем сообщение от {update.message.from_user.id}: {update.message.text[:50]}...")
+        elif update.callback_query:
+            logger.info(f"Обрабатываем callback query от {update.callback_query.from_user.id}")
+        
         # Обрабатываем обновление через диспетчер
         await dp.feed_update(bot=bot, update=update)
+        logger.info("Обновление успешно обработано")
     except Exception as e:
-        logger.error(f"Ошибка при обработке обновления: {e}")
+        logger.error(f"Ошибка при обработке обновления: {e}", exc_info=True)
         try:
-            await send_error_to_telegram(f"Ошибка при обработке обновления: {e}")
+            # Создаем новую сессию для отправки сообщения об ошибке
+            new_bot = Bot(token=TELEGRAM_BOT_TOKEN)
+            await new_bot.send_message(ADMIN_CHAT_ID, f"Ошибка при обработке обновления: {e}")
+            await new_bot.session.close()
         except Exception as send_err:
-            logger.error(f"Не удалось отправить сообщение об ошибке: {send_err}")
+            logger.error(f"Не удалось отправить сообщение об ошибке: {send_err}", exc_info=True)
 
 # Маршрут для установки вебхука
 @app.route("/set_webhook", methods=["GET"])
