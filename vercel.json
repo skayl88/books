@@ -5,14 +5,18 @@
       "src": "app.py",
       "use": "@vercel/python",
       "config": {
-        "maxDuration": 60
+        "maxLambdaSize": "15mb",
+        "runtime": "python3.10"
       }
     }
   ],
   "routes": [
     {
       "src": "/(.*)",
-      "dest": "/app.py"
+      "dest": "app.py"
     }
-  ]
+  ],
+  "env": {
+    "PYTHONUNBUFFERED": "1"
+  }
 }

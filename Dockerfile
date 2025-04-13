@@ -4,10 +4,19 @@ FROM python:3.10-slim
 # Устанавливаем рабочую директорию
 WORKDIR /app
 
+# Устанавливаем зависимости для сборки Python-пакетов
+RUN apt-get update && apt-get install -y \
+  gcc \
+  python3-dev \
+  libpq-dev \
+  && apt-get clean \
+  && rm -rf /var/lib/apt/lists/*
+
 # Копируем requirements.txt и устанавливаем зависимости
 COPY requirements.txt .
 
-RUN pip install --no-cache-dir -r requirements.txt
+# Устанавливаем зависимости с опцией --no-build-isolation для предотвращения проблем сборки
+RUN pip install --no-cache-dir --no-build-isolation -r requirements.txt
 
 # Копируем весь проект
 COPY . .
