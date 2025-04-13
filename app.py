@@ -43,6 +43,20 @@ dp = Dispatcher()
 # Функция для отправки ошибок в Telegram
 async def send_error_to_telegram(error_message: str):
     try:
+        # Проверяем, закрыт ли текущий цикл событий
+        try:
+            loop = asyncio.get_running_loop()
+            if loop.is_closed():
+                logger.warning("Текущий цикл событий закрыт, создаем новый")
+                raise RuntimeError("Event loop is closed")
+        except RuntimeError:
+            # Если функция выдала ошибку или цикл событий закрыт, создаем новую сессию
+            new_bot = Bot(token=TELEGRAM_BOT_TOKEN, parse_mode=ParseMode.HTML)
+            await new_bot.send_message(ADMIN_CHAT_ID, f"Произошла ошибка: {error_message}")
+            await new_bot.session.close()
+            return
+            
+        # Если цикл событий активен, используем существующий бот
         await bot.send_message(ADMIN_CHAT_ID, f"Произошла ошибка: {error_message}")
     except Exception as e:
         logger.error(f"Не удалось отправить сообщение об ошибке в Telegram: {e}")
@@ -360,9 +374,21 @@ async def startup():
         # Проверяем, работаем ли мы на Vercel
         vercel_url = os.getenv("VERCEL_URL")
         if vercel_url:
+            # Удаляем предыдущий вебхук, если он был
+            try:
+                await bot.delete_webhook(drop_pending_updates=True)
+                logger.info("Предыдущий вебхук удален")
+            except Exception as e:
+                logger.warning(f"Не удалось удалить предыдущий вебхук: {e}")
+                
+            # Устанавливаем новый вебхук
             webhook_url = f"https://{vercel_url}/webhook"
-            await bot.set_webhook(url=webhook_url)
+            await bot.set_webhook(url=webhook_url, drop_pending_updates=True)
             logger.info(f"Вебхук автоматически установлен на {webhook_url}")
+            
+            # Проверяем информацию о вебхуке
+            webhook_info = await bot.get_webhook_info()
+            logger.info(f"Информация о вебхуке: URL={webhook_info.url}, pending_updates={webhook_info.pending_update_count}")
         else:
             logger.info("Не на Vercel. Вебхук нужно установить вручную через /set_webhook")
     except Exception as e:
@@ -389,13 +415,32 @@ async def index():
 async def webhook():
     try:
         data = await request.get_data()
-        update = types.Update(**json.loads(data))
-        await dp.feed_update(bot=bot, update=update)
+        update_data = json.loads(data)
+        
+        # Создаем новую задачу для обработки обновления
+        # чтобы избежать проблем с циклом событий
+        asyncio.create_task(process_update(update_data))
+        
         return "", 200
     except Exception as e:
         logger.error(f"Ошибка при обработке вебхука: {e}")
-        await send_error_to_telegram(f"Ошибка при обработке вебхука: {e}")
+        # Не вызываем send_error_to_telegram здесь, так как это может вызвать ту же ошибку
         return jsonify({"error": str(e)}), 500
+
+# Отдельная функция для обработки обновлений
+async def process_update(update_data):
+    try:
+        # Создаем объект Update из данных
+        update = types.Update.model_validate(update_data)
+        
+        # Обрабатываем обновление через диспетчер
+        await dp.feed_update(bot=bot, update=update)
+    except Exception as e:
+        logger.error(f"Ошибка при обработке обновления: {e}")
+        try:
+            await send_error_to_telegram(f"Ошибка при обработке обновления: {e}")
+        except Exception as send_err:
+            logger.error(f"Не удалось отправить сообщение об ошибке: {send_err}")
 
 # Маршрут для установки вебхука
 @app.route("/set_webhook", methods=["GET"])
@@ -410,10 +455,33 @@ async def set_webhook():
             else:
                 return jsonify({"error": "Не удалось определить URL для вебхука. Укажите параметр url."}), 400
         
+        # Удаляем предыдущий вебхук
+        try:
+            await bot.delete_webhook(drop_pending_updates=True)
+            logger.info("Предыдущий вебхук удален")
+        except Exception as e:
+            logger.warning(f"Не удалось удалить предыдущий вебхук: {e}")
+        
         # Устанавливаем вебхук
-        await bot.set_webhook(url=webhook_url)
+        await bot.set_webhook(url=webhook_url, drop_pending_updates=True)
         logger.info(f"Вебхук установлен на {webhook_url}")
-        return jsonify({"status": "ok", "webhook_url": webhook_url})
+        
+        # Проверяем информацию о вебхуке
+        try:
+            webhook_info = await bot.get_webhook_info()
+            logger.info(f"Информация о вебхуке: URL={webhook_info.url}, pending_updates={webhook_info.pending_update_count}")
+            
+            return jsonify({
+                "status": "ok", 
+                "webhook_url": webhook_url,
+                "webhook_info": {
+                    "url": webhook_info.url,
+                    "pending_updates": webhook_info.pending_update_count
+                }
+            })
+        except Exception as e:
+            logger.warning(f"Не удалось получить информацию о вебхуке: {e}")
+            return jsonify({"status": "ok", "webhook_url": webhook_url})
     except Exception as e:
         logger.error(f"Ошибка при установке вебхука: {e}")
         return jsonify({"error": str(e)}), 500
