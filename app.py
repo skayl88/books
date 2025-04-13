@@ -127,132 +127,220 @@ async def generate_audio(text, model="en-US-GuyNeural"):
 # Асинхронная функция для генерации аудиокниги
 async def generate_audio_book_async(task_id, query, use_mock=False):
     try:
-        # Чтение системного сообщения
-        with open('system_message.txt', 'r', encoding='utf-8') as file:
-            system_message = file.read()
+        logger.info(f"Начало генерации аудиокниги для задачи {task_id}, запрос: {query}")
+        
+        # Создаем отдельное соединение с Telegram для этой задачи
+        task_bot = Bot(token=TELEGRAM_BOT_TOKEN)
+        
+        try:
+            # Чтение системного сообщения
+            with open('system_message.txt', 'r', encoding='utf-8') as file:
+                system_message = file.read()
 
-        if use_mock:
-            logging.debug("Используем локальный файл вместо запроса к API.")
-            try:
-                # Непосредственно читаем файл mock_response.json
-                with open("mock_response.json", "r", encoding='utf-8') as f:
-                    raw_content = f.read()
-                
-                logging.debug("Пытаемся распарсить mock_response.json с помощью safe_json_loads")
-                
-                # Используем безопасный парсер вместо обычной очистки и json.loads
-                response_data = safe_json_loads(raw_content)
-                logging.debug("Данные из mock_response.json успешно загружены")
-                
-            except json.JSONDecodeError as e:
-                logging.error(f"Ошибка при парсинге JSON: {str(e)}")
-                raise
-            except Exception as e:
-                logging.error(f"Ошибка при чтении файла mock_response.json: {str(e)}")
-                raise
-        else:
+            if use_mock:
+                logging.debug("Используем локальный файл вместо запроса к API.")
+                try:
+                    # Непосредственно читаем файл mock_response.json
+                    with open("mock_response.json", "r", encoding='utf-8') as f:
+                        raw_content = f.read()
+                    
+                    logging.debug("Пытаемся распарсить mock_response.json с помощью safe_json_loads")
+                    
+                    # Используем безопасный парсер вместо обычной очистки и json.loads
+                    response_data = safe_json_loads(raw_content)
+                    logging.debug("Данные из mock_response.json успешно загружены")
+                    
+                except json.JSONDecodeError as e:
+                    logging.error(f"Ошибка при парсинге JSON: {str(e)}")
+                    raise
+                except Exception as e:
+                    logging.error(f"Ошибка при чтении файла mock_response.json: {str(e)}")
+                    raise
+            else:
                 # Вызов API Anthropic
                 query_content = f"Please summarize the following query: {query}."
-                message = await asyncio.wait_for(
-                    asyncio.to_thread(
-                        anthropic_client.messages.create,
-                        model="claude-3-7-sonnet-20250219",
-                        max_tokens=6195,
-                        temperature=1,
-                
-                        system=system_message,
-                        messages=[{"role": "user", "content": query_content}]
-                    ),
-                    timeout=60  # 1 минута
-                )
-                logging.debug(f"Received response from Anthropic API: {message}")
-                
-                # Получаем текст из ответа API
-                raw_text = message.content[0].text if message.content and len(message.content) > 0 else None
-                if raw_text is None:
-                    raise ValueError(f"Ответ от API для запроса '{query}' не содержит текста.")
-                
-                # Записываем исходный ответ в файл для отладки
-                response_filename = f"response_{task_id}.txt"
-                with open(response_filename, "w", encoding="utf-8") as f:
-                    f.write(f"ЗАПРОС: {query}\n\n")
-                    f.write(f"ОТВЕТ API:\n{raw_text}")
-                logging.info(f"Ответ API сохранен в файл {response_filename}")
-                
-                logging.debug(f"Получен текст длиной {len(raw_text)} символов")
+                logging.info(f"Отправка запроса к API Anthropic для задачи {task_id}")
                 
                 try:
-                    # Используем безопасный парсер JSON
+                    message = await asyncio.wait_for(
+                        asyncio.to_thread(
+                            anthropic_client.messages.create,
+                            model="claude-3-7-sonnet-20250219",
+                            max_tokens=6195,
+                            temperature=1,
+                    
+                            system=system_message,
+                            messages=[{"role": "user", "content": query_content}]
+                        ),
+                        timeout=60  # 1 минута
+                    )
+                    logging.debug(f"Получен ответ от Anthropic API для задачи {task_id}")
+                    
+                    # Получаем текст из ответа API
+                    raw_text = message.content[0].text if message.content and len(message.content) > 0 else None
+                    if raw_text is None:
+                        raise ValueError(f"Ответ от API для запроса '{query}' не содержит текста.")
+                    
+                    # Записываем исходный ответ в файл для отладки
+                    response_filename = f"response_{task_id}.txt"
+                    with open(response_filename, "w", encoding="utf-8") as f:
+                        f.write(f"ЗАПРОС: {query}\n\n")
+                        f.write(f"ОТВЕТ API:\n{raw_text}")
+                    logging.info(f"Ответ API сохранен в файл {response_filename}")
+                    
+                    logging.debug(f"Получен текст длиной {len(raw_text)} символов")
+                    
+                    # Парсим ответ
                     response_data = safe_json_loads(raw_text)
                     logging.debug("JSON успешно распарсен с помощью safe_json_loads")
+                except asyncio.TimeoutError:
+                    error_message = f"Превышено время ожидания ответа от API Anthropic (60 секунд) для задачи {task_id}"
+                    logging.error(error_message)
                     
-                    # # Записываем распарсенный JSON в файл для отладки
-                    # parsed_filename = f"parsed_{task_id}.json"
-                    # with open(parsed_filename, "w", encoding="utf-8") as f:
-                    #     json.dump(response_data, f, ensure_ascii=False, indent=2)
-                    # logging.info(f"Распарсенный JSON сохранен в файл {parsed_filename}")
-                
+                    # Обновляем статус в базе данных при ошибке
+                    db_cursor.execute("""
+                        UPDATE books 
+                        SET status = 'failed', summary_text = %s 
+                        WHERE query = %s
+                    """, (error_message, query))
+                    db_connection.commit()
+                    
+                    # Отправляем уведомление об ошибке
+                    await task_bot.send_message(ADMIN_CHAT_ID, f"⚠️ {error_message}")
+                    return
                 except Exception as e:
-                    logging.error(f"Не удалось распарсить ответ от Anthropic API: {e}")
-                    logging.error(f"Полный ответ API сохранен в {response_filename}")
-                    raise ValueError(f"Не удалось обработать ответ API: {e}")
+                    error_message = f"Ошибка при обработке ответа API: {str(e)}"
+                    logging.error(error_message)
+                    
+                    # Обновляем статус в базе данных при ошибке
+                    db_cursor.execute("""
+                        UPDATE books 
+                        SET status = 'failed', summary_text = %s 
+                        WHERE query = %s
+                    """, (error_message, query))
+                    db_connection.commit()
+                    
+                    # Отправляем уведомление об ошибке
+                    await task_bot.send_message(ADMIN_CHAT_ID, f"⚠️ {error_message}")
+                    return
 
-        if not response_data.get('summary_possible', False):
-            error_message = response_data.get('summary_text', 'Не удалось сгенерировать резюме.')
-            logging.error(f"Ошибка при обработке запроса '{query}': {error_message}")
+            # Проверяем результат парсинга
+            if not response_data.get('summary_possible', False):
+                error_message = response_data.get('summary_text', 'Не удалось сгенерировать резюме.')
+                logging.error(f"Ошибка при обработке запроса '{query}': {error_message}")
+                
+                # Обновляем статус в базе данных
+                db_cursor.execute("""
+                    UPDATE books 
+                    SET status = 'failed', summary_text = %s 
+                    WHERE query = %s
+                """, (error_message, query))
+                db_connection.commit()
+                
+                # Отправляем уведомление об ошибке
+                await task_bot.send_message(ADMIN_CHAT_ID, f"⚠️ Ошибка при генерации аудиокниги для '{query}': {error_message}")
+                return
+
+            # Извлекаем данные из ответа
+            summary_text = response_data.get('summary_text')
+            title = response_data.get('title')
+            author = response_data.get('author')
             
-            # Обновляем статус в базе данных
+            logging.info(f"Сводка получена для задачи {task_id}: {summary_text[:100]}..., Название: {title}, Автор: {author}")
+
+            # Генерируем аудио из текста
+            try:
+                logging.info(f"Начинаем генерацию аудио для задачи {task_id}")
+                audio_content = await generate_audio(summary_text)
+                logging.info(f"Аудио успешно сгенерировано для задачи {task_id}, размер: {len(audio_content)} байт")
+            except Exception as audio_error:
+                error_message = f"Ошибка при генерации аудио: {str(audio_error)}"
+                logging.error(error_message)
+                
+                # Обновляем статус в базе данных
+                db_cursor.execute("""
+                    UPDATE books 
+                    SET status = 'failed', summary_text = %s 
+                    WHERE query = %s
+                """, (error_message, query))
+                db_connection.commit()
+                
+                # Отправляем уведомление об ошибке
+                await task_bot.send_message(ADMIN_CHAT_ID, f"⚠️ {error_message}")
+                return
+            
+            # Загружаем аудио в Vercel Blob Storage
+            try:
+                logging.info(f"Загружаем аудио в Blob Storage для задачи {task_id}")
+                file_path = f"audiobooks/{task_id}.mp3"
+                file_url = await upload_to_vercel_blob(file_path, audio_content)
+                logging.info(f"Аудиофайл успешно загружен в Blob Storage: {file_url}")
+            except Exception as upload_error:
+                error_message = f"Ошибка при загрузке файла: {str(upload_error)}"
+                logging.error(error_message)
+                
+                # Обновляем статус в базе данных
+                db_cursor.execute("""
+                    UPDATE books 
+                    SET status = 'failed', summary_text = %s 
+                    WHERE query = %s
+                """, (error_message, query))
+                db_connection.commit()
+                
+                # Отправляем уведомление об ошибке
+                await task_bot.send_message(ADMIN_CHAT_ID, f"⚠️ {error_message}")
+                return
+
+            # Обновляем запись в базе данных
             db_cursor.execute("""
                 UPDATE books 
-                SET status = 'failed', summary_text = %s 
+                SET status = 'completed', 
+                    file_url = %s, 
+                    summary_text = %s,
+                    title = %s,
+                    author = %s
                 WHERE query = %s
-            """, (error_message, query))
+            """, (file_url, summary_text, title, author, query))
             db_connection.commit()
-            return
+            logging.info(f"Информация о задаче {task_id} обновлена в базе данных")
 
-        summary_text = response_data.get('summary_text')
-        title = response_data.get('title')
-        author = response_data.get('author')
-        
-        logging.info(f"Сводка: {summary_text[:100]}..., Название: {title}, Автор: {author}")
+            # Отправляем уведомление пользователю через бота
+            await task_bot.send_message(
+                ADMIN_CHAT_ID, 
+                f"✅ Аудиокнига готова!\n\n🔤 Название: {title}\n👤 Автор: {author}\n\n🔗 Ссылка: {file_url}"
+            )
+            logging.info(f"Уведомление отправлено пользователю для задачи {task_id}")
 
-        # Генерируем аудио из текста
-        audio_content = await generate_audio(summary_text)
-        
-        # Загружаем аудио в Vercel Blob Storage
-        file_path = f"audiobooks/{task_id}.mp3"
-        file_url = await upload_to_vercel_blob(file_path, audio_content)
-
-        # Обновляем запись в базе данных
-        db_cursor.execute("""
-            UPDATE books 
-            SET status = 'completed', 
-                file_url = %s, 
-                summary_text = %s,
-                title = %s,
-                author = %s
-            WHERE query = %s
-        """, (file_url, summary_text, title, author, query))
-        db_connection.commit()
-
-        # Отправляем уведомление пользователю через бота
-        await bot.send_message(ADMIN_CHAT_ID, f"Аудиокнига готова!\nНазвание: {title}\nАвтор: {author}\nURL: {file_url}")
+        finally:
+            # Закрываем соединение
+            await task_bot.session.close()
+            logging.debug(f"Соединение с Telegram закрыто для задачи {task_id}")
 
     except Exception as e:
         error_message = str(e)
-        logging.error(f"Ошибка при генерации аудиокниги: {error_message}")
+        logging.error(f"Критическая ошибка при генерации аудиокниги для задачи {task_id}: {error_message}", exc_info=True)
         
-        # Обновляем статус в базе данных при ошибке
-        db_cursor.execute("""
-            UPDATE books 
-            SET status = 'failed', 
-                summary_text = %s 
-            WHERE query = %s
-        """, (error_message, query))
-        db_connection.commit()
-        
-        # Отправляем уведомление об ошибке
-        await send_error_to_telegram(f"Ошибка при генерации аудиокниги для запроса '{query}': {error_message}")
+        try:
+            # Обновляем статус в базе данных при ошибке
+            db_cursor.execute("""
+                UPDATE books 
+                SET status = 'failed', 
+                    summary_text = %s 
+                WHERE query = %s
+            """, (error_message, query))
+            db_connection.commit()
+            
+            # Отправляем уведомление об ошибке через новое соединение
+            error_bot = Bot(token=TELEGRAM_BOT_TOKEN)
+            try:
+                await error_bot.send_message(
+                    ADMIN_CHAT_ID, 
+                    f"❌ Критическая ошибка при генерации аудиокниги для запроса '{query}': {error_message}"
+                )
+            finally:
+                await error_bot.session.close()
+        except Exception as notify_error:
+            logging.error(f"Не удалось уведомить о критической ошибке: {notify_error}", exc_info=True)
 
 # Регистрация обработчиков сообщений с явным указанием диспетчера (aiogram 3.x)
 @dp.message(Command("start", "help"))
@@ -505,7 +593,25 @@ async def webhook():
             
             # Логируем тип обновления для диагностики
             if update.message:
-                logger.info(f"Обрабатываем сообщение от {update.message.from_user.id}: {update.message.text[:50]}...")
+                # Добавляем здесь дополнительное логирование
+                if not hasattr(update.message, 'from_user') or not update.message.from_user:
+                    logger.warning(f"Сообщение не содержит информацию о пользователе: {update_data}")
+                    
+                # Получаем ID чата и пользователя для логирования
+                chat_id = update.message.chat.id if hasattr(update.message, 'chat') and update.message.chat else 'неизвестно'
+                user_id = update.message.from_user.id if hasattr(update.message, 'from_user') and update.message.from_user else 'неизвестно'
+                logger.info(f"Обрабатываем сообщение от пользователя {user_id} в чате {chat_id}")
+                
+                # Проверяем наличие текста в сообщении
+                if not hasattr(update.message, 'text') or not update.message.text:
+                    logger.warning(f"Сообщение не содержит текст: {update_data}")
+                    await webhook_bot.send_message(
+                        chat_id=chat_id,
+                        text="Я могу обрабатывать только текстовые сообщения. Пожалуйста, отправьте текст."
+                    )
+                    return "", 200
+                
+                logger.info(f"Обрабатываем сообщение: {update.message.text[:50]}...")
                 
                 # Обрабатываем команды напрямую
                 if update.message.text.startswith('/'):
@@ -537,40 +643,60 @@ async def webhook():
                                 text=f"Ваша аудиокнига готова: {file_url}"
                             )
                             logger.info(f"Отправлена ссылка на готовую аудиокнигу")
-                            return "", 200
                         elif status == "pending" or status == "processing":
                             await webhook_bot.send_message(
                                 chat_id=update.message.chat.id,
                                 text="Ваша задача ещё в процессе. Пожалуйста, подождите."
                             )
                             logger.info(f"Отправлено уведомление о задаче в процессе")
-                            return "", 200
+                        else:
+                            # Для статуса "failed" или любого другого
+                            await webhook_bot.send_message(
+                                chat_id=update.message.chat.id,
+                                text=f"Произошла ошибка при обработке вашего запроса. Пожалуйста, попробуйте другое название книги."
+                            )
+                            logger.info(f"Отправлено уведомление о неудачной обработке")
+                    else:
+                        # Генерация уникального task_id
+                        task_id = str(uuid4())
 
-                    # Генерация уникального task_id
-                    task_id = str(uuid4())
+                        # Сохранение задачи в базу данных
+                        db_cursor.execute(""" 
+                        INSERT INTO books (query, status) 
+                        VALUES (%s, %s) 
+                        ON CONFLICT (query) DO UPDATE SET 
+                            status = EXCLUDED.status;
+                        """, (query, "pending"))
+                        db_connection.commit()
+                        logger.info(f"Создана запись в базе данных для запроса: {query}")
 
-                    # Сохранение задачи в базу данных
-                    db_cursor.execute(""" 
-                    INSERT INTO books (query, status) 
-                    VALUES (%s, %s) 
-                    ON CONFLICT (query) DO UPDATE SET 
-                        status = EXCLUDED.status;
-                    """, (query, "pending"))
-                    db_connection.commit()
-
-                    # Создаем задачу в фоновом режиме
-                    asyncio.create_task(generate_audio_book_async(task_id, query))
-
-                    await webhook_bot.send_message(
-                        chat_id=update.message.chat.id,
-                        text=f"Запрос принят! ID задачи: {task_id}. Проверяйте статус позже."
-                    )
-                    logger.info(f"Создана новая задача и отправлено подтверждение")
+                        # Отправляем подтверждение пользователю ПЕРЕД созданием задачи
+                        # чтобы гарантировать, что пользователь получит ответ
+                        response_message = await webhook_bot.send_message(
+                            chat_id=update.message.chat.id,
+                            text=f"Запрос принят! ID задачи: {task_id}. Проверяйте статус позже."
+                        )
+                        logger.info(f"Отправлено подтверждение с ID: {task_id}")
+                        
+                        # Только после этого создаем задачу в фоновом режиме
+                        try:
+                            # Создаем задачу в фоновом режиме 
+                            asyncio.create_task(generate_audio_book_async(task_id, query))
+                            logger.info(f"Создана фоновая задача для запроса: {query}")
+                        except Exception as task_error:
+                            logger.error(f"Не удалось создать фоновую задачу: {task_error}", exc_info=True)
+                            # Но пользователю уже отправлено подтверждение, так что это ОК
             elif update.callback_query:
                 logger.info(f"Получен callback query от {update.callback_query.from_user.id}")
                 # Здесь можно добавить обработку callback_query
+                
+                # Отвечаем на callback_query, чтобы убрать "часики" в интерфейсе
+                await webhook_bot.answer_callback_query(callback_query_id=update.callback_query.id)
+            else:
+                logger.warning(f"Получен неизвестный тип обновления: {update_data}")
             
             logger.info("Обновление успешно обработано")
+            return "", 200
         except Exception as e:
             logger.error(f"Ошибка при обработке обновления: {e}", exc_info=True)
             try:
@@ -581,11 +707,14 @@ async def webhook():
                 )
             except Exception as send_err:
                 logger.error(f"Не удалось отправить сообщение об ошибке: {send_err}", exc_info=True)
+            return "", 200  # Возвращаем 200, даже если была ошибка, чтобы Telegram не пытался отправить обновление повторно
         finally:
             # Закрываем сессию бота в любом случае
-            await webhook_bot.session.close()
-        
-        return "", 200
+            try:
+                await webhook_bot.session.close()
+                logger.debug("Сессия webhook_bot успешно закрыта")
+            except Exception as close_err:
+                logger.error(f"Ошибка при закрытии сессии бота: {close_err}")
     except Exception as e:
         logger.error(f"Критическая ошибка при обработке вебхука: {e}", exc_info=True)
         return jsonify({"error": str(e)}), 500
@@ -871,50 +1000,67 @@ async def test_message():
 @app.route("/telegram_status", methods=["GET"])
 async def telegram_status():
     try:
-        # Проверяем соединение с Telegram API
-        bot_info = await bot.get_me()
-        webhook_info = await bot.get_webhook_info()
+        # Создаем временное соединение
+        status_bot = Bot(token=TELEGRAM_BOT_TOKEN)
         
-        # Получаем информацию об обновлениях
         try:
-            # Создаем обновленное соединение с Telegram
-            new_bot = Bot(token=TELEGRAM_BOT_TOKEN)
-            updates = await new_bot.get_updates(limit=5, timeout=5)
-            updates_info = [
-                {
-                    "update_id": update.update_id,
-                    "type": "message" if update.message else "callback_query" if update.callback_query else "other"
-                }
-                for update in updates
-            ]
-            await new_bot.session.close()
-        except Exception as e:
-            updates_info = {"error": str(e)}
-        
-        # Компонуем результат
-        result = {
-            "bot": {
-                "id": bot_info.id,
-                "name": bot_info.first_name,
-                "username": bot_info.username
-            },
-            "webhook": {
-                "url": webhook_info.url,
-                "pending_updates": webhook_info.pending_update_count,
-                "max_connections": webhook_info.max_connections
-            },
-            "updates": updates_info
-        }
-        
-        # Если вебхук не установлен правильно, предлагаем его установить
-        vercel_url = os.getenv("VERCEL_URL")
-        if vercel_url and (not webhook_info.url or "vercel.app" not in webhook_info.url):
-            result["recommendation"] = "Установите вебхук на корректный URL с помощью /set_webhook"
-        
-        return jsonify(result)
+            # Проверяем соединение с Telegram API
+            bot_info = await status_bot.get_me()
+            webhook_info = await status_bot.get_webhook_info()
+            
+            # Получаем информацию об обновлениях
+            try:
+                # Пытаемся получить обновления, но только если вебхук не установлен
+                # (иначе get_updates не будет работать)
+                updates_info = []
+                if not webhook_info.url:
+                    updates = await status_bot.get_updates(limit=5, timeout=5)
+                    updates_info = [
+                        {
+                            "update_id": update.update_id,
+                            "type": "message" if update.message else "callback_query" if update.callback_query else "other"
+                        }
+                        for update in updates
+                    ]
+                else:
+                    updates_info = {
+                        "message": "Cannot get updates while webhook is active. Use /remove_webhook first."
+                    }
+            except Exception as e:
+                updates_info = {"error": str(e)}
+            
+            # Компонуем результат
+            result = {
+                "bot": {
+                    "id": bot_info.id,
+                    "name": bot_info.first_name,
+                    "username": bot_info.username
+                },
+                "webhook": {
+                    "url": webhook_info.url,
+                    "pending_updates": webhook_info.pending_update_count,
+                    "max_connections": webhook_info.max_connections
+                },
+                "updates": updates_info,
+                "timestamp": datetime.datetime.now().isoformat()
+            }
+            
+            # Если вебхук не установлен правильно, предлагаем его установить
+            vercel_url = os.getenv("VERCEL_URL")
+            if vercel_url and (not webhook_info.url or "vercel.app" not in webhook_info.url):
+                result["recommendation"] = "Установите вебхук на корректный URL с помощью /set_webhook"
+            
+            return jsonify(result)
+        finally:
+            # Закрываем соединение в любом случае
+            await status_bot.session.close()
     except Exception as e:
         logger.error(f"Ошибка при проверке статуса Telegram: {e}", exc_info=True)
-        return jsonify({"status": "error", "error": str(e)})
+        return jsonify({
+            "status": "error", 
+            "error": str(e),
+            "timestamp": datetime.datetime.now().isoformat()
+        })
 
 # Маршрут для активации и принудительной проверки работы с Telegram API
 @app.route("/activate", methods=["GET"])
