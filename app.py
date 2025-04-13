@@ -16,6 +16,7 @@ from aiogram.enums import ParseMode
 from aiogram.filters import Command
 from httpx import Timeout
 import re, json
+import datetime
 # Загружаем переменные окружения из .env файла
 load_dotenv()
 
@@ -37,6 +38,9 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID")  # ID чата, куда будут отправляться ошибки
 
 # Инициализация Telegram бота и диспетчера (aiogram 3.x)
+# ВАЖНО: В serverless-окружении Vercel происходит ошибка 'Event loop is closed',
+# поэтому мы НЕ используем эту инстанцию бота напрямую, а создаем временные соединения.
+# Эта инстанция сохраняется только для совместимости.
 bot = Bot(token=TELEGRAM_BOT_TOKEN)
 dp = Dispatcher()
 
@@ -374,74 +378,101 @@ async def startup():
         # Проверяем, работаем ли мы на Vercel
         vercel_url = os.getenv("VERCEL_URL")
         if vercel_url:
-            # Удаляем предыдущий вебхук, если он был
-            try:
-                await bot.delete_webhook(drop_pending_updates=True)
-                logger.info("Предыдущий вебхук удален")
-            except Exception as e:
-                logger.warning(f"Не удалось удалить предыдущий вебхук: {e}")
-                
-            # Устанавливаем новый вебхук
-            webhook_url = f"https://{vercel_url}/webhook"
-            await bot.set_webhook(url=webhook_url, drop_pending_updates=True)
-            logger.info(f"Вебхук автоматически установлен на {webhook_url}")
+            # Создаем временное соединение
+            startup_bot = Bot(token=TELEGRAM_BOT_TOKEN)
             
-            # Проверяем информацию о вебхуке
-            webhook_info = await bot.get_webhook_info()
-            logger.info(f"Информация о вебхуке: URL={webhook_info.url}, pending_updates={webhook_info.pending_update_count}")
+            try:
+                # Удаляем предыдущий вебхук, если он был
+                await startup_bot.delete_webhook(drop_pending_updates=True)
+                logger.info("Предыдущий вебхук удален")
+                
+                # Устанавливаем новый вебхук
+                webhook_url = f"https://{vercel_url}/webhook"
+                await startup_bot.set_webhook(url=webhook_url, drop_pending_updates=True)
+                logger.info(f"Вебхук автоматически установлен на {webhook_url}")
+                
+                # Проверяем информацию о вебхуке
+                webhook_info = await startup_bot.get_webhook_info()
+                logger.info(f"Информация о вебхуке: URL={webhook_info.url}, pending_updates={webhook_info.pending_update_count}")
+            finally:
+                # Закрываем соединение
+                await startup_bot.session.close()
         else:
             logger.info("Не на Vercel. Вебхук нужно установить вручную через /set_webhook")
     except Exception as e:
-        logger.error(f"Ошибка при автоматической настройке вебхука: {e}")
+        logger.error(f"Ошибка при автоматической настройке вебхука: {e}", exc_info=True)
     
     logger.info("Приложение запущено")
 
 # Завершение работы приложения
 @app.after_serving
 async def shutdown():
-    # Закрываем сессию бота
-    session = await bot.get_session()
-    if session:
-        await session.close()
-    logger.info("Telegram bot stopped")
+    try:
+        logger.info("Выполняется завершение работы приложения")
+        
+        # Пытаемся закрыть сеанс бота, если он существует
+        try:
+            session = await bot.get_session()
+            if session and not session.closed:
+                await session.close()
+                logger.info("Сессия бота закрыта")
+        except Exception as e:
+            logger.warning(f"Ошибка при закрытии сессии бота: {e}")
+        
+        logger.info("Приложение остановлено")
+    except Exception as e:
+        logger.error(f"Ошибка при завершении работы: {e}", exc_info=True)
 
 # Маршрут Quart для проверки работоспособности
 @app.route("/")
 async def index():
     try:
-        # Проверяем, установлен ли вебхук
-        webhook_info = await bot.get_webhook_info()
+        # Используем создание отдельного соединения вместо общего бота
+        # чтобы избежать проблем с циклом событий
+        test_bot = Bot(token=TELEGRAM_BOT_TOKEN)
         
-        # Проверяем, работаем ли мы на Vercel
-        vercel_url = os.getenv("VERCEL_URL")
-        expected_webhook = f"https://{vercel_url}/webhook" if vercel_url else None
-        
-        # Информация для отображения в ответе
-        info = {
-            "status": "ok",
-            "webhook": {
-                "current": webhook_info.url,
-                "expected": expected_webhook,
-                "pending_updates": webhook_info.pending_update_count
+        try:
+            # Проверяем, установлен ли вебхук
+            webhook_info = await test_bot.get_webhook_info()
+            
+            # Проверяем, работаем ли мы на Vercel
+            vercel_url = os.getenv("VERCEL_URL")
+            expected_webhook = f"https://{vercel_url}/webhook" if vercel_url else None
+            
+            # Информация для отображения в ответе
+            info = {
+                "status": "ok",
+                "timestamp": datetime.datetime.now().isoformat(),
+                "webhook": {
+                    "current": webhook_info.url,
+                    "expected": expected_webhook,
+                    "pending_updates": webhook_info.pending_update_count
+                }
             }
-        }
-        
-        # Если вебхук не установлен или установлен неправильно, и мы на Vercel
-        if vercel_url and (not webhook_info.url or webhook_info.url != expected_webhook):
-            # Удаляем старый вебхук
-            await bot.delete_webhook(drop_pending_updates=True)
-            # Устанавливаем новый
-            await bot.set_webhook(url=expected_webhook, drop_pending_updates=True)
-            # Проверяем, что установка прошла успешно
-            new_webhook_info = await bot.get_webhook_info()
-            info["webhook"]["action"] = "updated"
-            info["webhook"]["current"] = new_webhook_info.url
-            logger.info(f"Вебхук обновлен автоматически: {new_webhook_info.url}")
+            
+            # Если вебхук не установлен или установлен неправильно, и мы на Vercel
+            if vercel_url and (not webhook_info.url or webhook_info.url != expected_webhook):
+                # Удаляем старый вебхук
+                await test_bot.delete_webhook(drop_pending_updates=True)
+                # Устанавливаем новый
+                await test_bot.set_webhook(url=expected_webhook, drop_pending_updates=True)
+                # Проверяем, что установка прошла успешно
+                new_webhook_info = await test_bot.get_webhook_info()
+                info["webhook"]["action"] = "updated"
+                info["webhook"]["current"] = new_webhook_info.url
+                logger.info(f"Вебхук обновлен автоматически: {new_webhook_info.url}")
+        finally:
+            # Обязательно закрываем сессию в любом случае
+            await test_bot.session.close()
         
         return jsonify(info)
     except Exception as e:
         logger.error(f"Ошибка при проверке работоспособности: {e}", exc_info=True)
-        return jsonify({"status": "error", "error": str(e)})
+        return jsonify({
+            "status": "error", 
+            "error": str(e),
+            "message": "Используйте /activate для ручной проверки и активации бота"
+        })
 
 # Обработчик вебхуков от Telegram
 @app.route("/webhook", methods=["POST"])
@@ -451,129 +482,240 @@ async def webhook():
         data = await request.get_data()
         headers = dict(request.headers)
         
+        # Для отладки - сохраняем данные в файл
         logger.info(f"Получен вебхук. Заголовки: {headers}")
-        logger.info(f"Получены данные: {data[:200]}...")  # Логируем начало данных
+        logger.info(f"Получены данные длиной: {len(data)} байт")
         
         try:
             update_data = json.loads(data)
+            # Записываем только базовую информацию для безопасности
+            if 'message' in update_data and 'text' in update_data['message']:
+                logger.info(f"Получено сообщение: {update_data['message']['text'][:50]}...")
             logger.info(f"Данные успешно разобраны как JSON")
         except json.JSONDecodeError as e:
             logger.error(f"Не удалось разобрать JSON: {e}")
             return jsonify({"error": "Invalid JSON data"}), 400
         
-        # Создаем задачу для асинхронной обработки обновления
-        loop = asyncio.get_event_loop()
-        if not loop.is_closed():
-            asyncio.create_task(process_update(update_data))
-            logger.info("Задача для обработки обновления создана")
-        else:
-            logger.warning("Цикл событий закрыт, обрабатываем обновление напрямую")
-            # Если цикл закрыт, обрабатываем напрямую (не асинхронно)
-            await process_update(update_data)
+        # Создаем нового бота для обработки вебхука
+        webhook_bot = Bot(token=TELEGRAM_BOT_TOKEN)
+        
+        try:
+            # Создаем объект Update из данных
+            update = types.Update.model_validate(update_data)
+            
+            # Логируем тип обновления для диагностики
+            if update.message:
+                logger.info(f"Обрабатываем сообщение от {update.message.from_user.id}: {update.message.text[:50]}...")
+                
+                # Обрабатываем команды напрямую
+                if update.message.text.startswith('/'):
+                    if update.message.text.startswith('/start') or update.message.text.startswith('/help'):
+                        await webhook_bot.send_message(
+                            chat_id=update.message.chat.id,
+                            text="Привет! Отправь мне название книги, и я создам аудиокнигу."
+                        )
+                        logger.info(f"Отправлен ответ на команду /start или /help")
+                    else:
+                        await webhook_bot.send_message(
+                            chat_id=update.message.chat.id,
+                            text="Неизвестная команда. Используйте /help для получения списка команд."
+                        )
+                        logger.info(f"Отправлен ответ на неизвестную команду")
+                else:
+                    # Обрабатываем обычные сообщения
+                    query = update.message.text.strip()
+                    
+                    # Проверяем базу данных
+                    db_cursor.execute("SELECT file_url, status FROM books WHERE query = %s", (query,))
+                    result = db_cursor.fetchone()
+
+                    if result:
+                        file_url, status = result
+                        if status == "completed":
+                            await webhook_bot.send_message(
+                                chat_id=update.message.chat.id,
+                                text=f"Ваша аудиокнига готова: {file_url}"
+                            )
+                            logger.info(f"Отправлена ссылка на готовую аудиокнигу")
+                            return "", 200
+                        elif status == "pending" or status == "processing":
+                            await webhook_bot.send_message(
+                                chat_id=update.message.chat.id,
+                                text="Ваша задача ещё в процессе. Пожалуйста, подождите."
+                            )
+                            logger.info(f"Отправлено уведомление о задаче в процессе")
+                            return "", 200
+
+                    # Генерация уникального task_id
+                    task_id = str(uuid4())
+
+                    # Сохранение задачи в базу данных
+                    db_cursor.execute(""" 
+                    INSERT INTO books (query, status) 
+                    VALUES (%s, %s) 
+                    ON CONFLICT (query) DO UPDATE SET 
+                        status = EXCLUDED.status;
+                    """, (query, "pending"))
+                    db_connection.commit()
+
+                    # Создаем задачу в фоновом режиме
+                    asyncio.create_task(generate_audio_book_async(task_id, query))
+
+                    await webhook_bot.send_message(
+                        chat_id=update.message.chat.id,
+                        text=f"Запрос принят! ID задачи: {task_id}. Проверяйте статус позже."
+                    )
+                    logger.info(f"Создана новая задача и отправлено подтверждение")
+            elif update.callback_query:
+                logger.info(f"Получен callback query от {update.callback_query.from_user.id}")
+                # Здесь можно добавить обработку callback_query
+            
+            logger.info("Обновление успешно обработано")
+        except Exception as e:
+            logger.error(f"Ошибка при обработке обновления: {e}", exc_info=True)
+            try:
+                # Отправляем уведомление об ошибке администратору
+                await webhook_bot.send_message(
+                    chat_id=ADMIN_CHAT_ID,
+                    text=f"Ошибка при обработке вебхука: {e}"
+                )
+            except Exception as send_err:
+                logger.error(f"Не удалось отправить сообщение об ошибке: {send_err}", exc_info=True)
+        finally:
+            # Закрываем сессию бота в любом случае
+            await webhook_bot.session.close()
         
         return "", 200
     except Exception as e:
-        logger.error(f"Ошибка при обработке вебхука: {e}", exc_info=True)
+        logger.error(f"Критическая ошибка при обработке вебхука: {e}", exc_info=True)
         return jsonify({"error": str(e)}), 500
 
 # Добавим маршрут для диагностики
 @app.route("/debug", methods=["GET"])
 async def debug_info():
     try:
-        # Получаем информацию о боте
-        bot_info = await bot.get_me()
-        bot_name = f"@{bot_info.username}" if bot_info.username else bot_info.first_name
+        # Создаем временное соединение
+        debug_bot = Bot(token=TELEGRAM_BOT_TOKEN)
         
-        # Получаем информацию о вебхуке
-        webhook_info = await bot.get_webhook_info()
-        
-        # Проверяем соединение с Redis
-        redis_status = "Работает" if redis_client.ping() else "Не работает"
-        
-        # Проверяем соединение с базой данных
         try:
-            db_cursor.execute("SELECT 1")
-            db_status = "Работает"
-        except Exception as e:
-            db_status = f"Ошибка: {str(e)}"
-        
-        return jsonify({
-            "bot": {
-                "id": bot_info.id,
-                "name": bot_name,
-                "is_bot": bot_info.is_bot
-            },
-            "webhook": {
-                "url": webhook_info.url,
-                "pending_updates": webhook_info.pending_update_count,
-                "max_connections": webhook_info.max_connections
-            },
-            "connections": {
-                "redis": redis_status,
-                "database": db_status
-            },
-            "environment": {
-                "vercel_url": os.getenv("VERCEL_URL"),
-                "admin_chat_id": ADMIN_CHAT_ID,
-                "python_version": os.sys.version
+            # Получаем информацию о боте
+            bot_info = await debug_bot.get_me()
+            bot_name = f"@{bot_info.username}" if bot_info.username else bot_info.first_name
+            
+            # Получаем информацию о вебхуке
+            webhook_info = await debug_bot.get_webhook_info()
+            
+            # Проверяем соединение с Redis
+            redis_status = "Работает" if redis_client.ping() else "Не работает"
+            
+            # Проверяем соединение с базой данных
+            try:
+                db_cursor.execute("SELECT 1")
+                db_status = "Работает"
+            except Exception as e:
+                db_status = f"Ошибка: {str(e)}"
+            
+            # Получаем информацию о цикле событий
+            try:
+                loop = asyncio.get_running_loop()
+                loop_status = {
+                    "is_running": loop.is_running(),
+                    "is_closed": loop.is_closed()
+                }
+            except Exception as e:
+                loop_status = {"error": str(e)}
+                
+            # Проверяем состояние таблицы books
+            try:
+                db_cursor.execute("SELECT COUNT(*) FROM books")
+                book_count = db_cursor.fetchone()[0]
+                
+                db_cursor.execute("SELECT COUNT(*) FROM books WHERE status = 'completed'")
+                completed_count = db_cursor.fetchone()[0]
+                
+                db_cursor.execute("SELECT COUNT(*) FROM books WHERE status = 'processing' OR status = 'pending'")
+                pending_count = db_cursor.fetchone()[0]
+                
+                db_cursor.execute("SELECT COUNT(*) FROM books WHERE status = 'failed'")
+                failed_count = db_cursor.fetchone()[0]
+                
+                books_status = {
+                    "total": book_count,
+                    "completed": completed_count,
+                    "pending": pending_count,
+                    "failed": failed_count
+                }
+            except Exception as e:
+                books_status = {"error": str(e)}
+                
+            # Формируем результат
+            result = {
+                "bot": {
+                    "id": bot_info.id,
+                    "name": bot_name,
+                    "is_bot": bot_info.is_bot
+                },
+                "webhook": {
+                    "url": webhook_info.url,
+                    "pending_updates": webhook_info.pending_update_count,
+                    "max_connections": webhook_info.max_connections
+                },
+                "connections": {
+                    "redis": redis_status,
+                    "database": db_status
+                },
+                "environment": {
+                    "vercel_url": os.getenv("VERCEL_URL"),
+                    "admin_chat_id": ADMIN_CHAT_ID,
+                    "python_version": os.sys.version
+                },
+                "asyncio": loop_status,
+                "books": books_status,
+                "timestamp": datetime.datetime.now().isoformat()
             }
-        })
+            
+            return jsonify(result)
+        finally:
+            # Закрываем соединение в любом случае
+            await debug_bot.session.close()
     except Exception as e:
         logger.error(f"Ошибка при получении отладочной информации: {e}", exc_info=True)
-        return jsonify({"error": str(e)}), 500
-
-# Отдельная функция для обработки обновлений
-async def process_update(update_data):
-    try:
-        # Создаем объект Update из данных
-        update = types.Update.model_validate(update_data)
-        
-        # Логируем тип обновления для диагностики
-        if update.message:
-            logger.info(f"Обрабатываем сообщение от {update.message.from_user.id}: {update.message.text[:50]}...")
-        elif update.callback_query:
-            logger.info(f"Обрабатываем callback query от {update.callback_query.from_user.id}")
-        
-        # Обрабатываем обновление через диспетчер
-        await dp.feed_update(bot=bot, update=update)
-        logger.info("Обновление успешно обработано")
-    except Exception as e:
-        logger.error(f"Ошибка при обработке обновления: {e}", exc_info=True)
-        try:
-            # Создаем новую сессию для отправки сообщения об ошибке
-            new_bot = Bot(token=TELEGRAM_BOT_TOKEN)
-            await new_bot.send_message(ADMIN_CHAT_ID, f"Ошибка при обработке обновления: {e}")
-            await new_bot.session.close()
-        except Exception as send_err:
-            logger.error(f"Не удалось отправить сообщение об ошибке: {send_err}", exc_info=True)
+        return jsonify({
+            "status": "error", 
+            "error": str(e),
+            "timestamp": datetime.datetime.now().isoformat()
+        }), 500
 
 # Маршрут для установки вебхука
 @app.route("/set_webhook", methods=["GET"])
 async def set_webhook():
     try:
-        # Получаем URL вебхука из запроса или конструируем из заголовка Host
-        webhook_url = request.args.get("url")
-        if not webhook_url:
-            host = request.headers.get("Host")
-            if host:
-                webhook_url = f"https://{host}/webhook"
-            else:
-                return jsonify({"error": "Не удалось определить URL для вебхука. Укажите параметр url."}), 400
+        # Создаем отдельное соединение для этой операции
+        test_bot = Bot(token=TELEGRAM_BOT_TOKEN)
         
-        # Удаляем предыдущий вебхук
         try:
-            await bot.delete_webhook(drop_pending_updates=True)
-            logger.info("Предыдущий вебхук удален")
-        except Exception as e:
-            logger.warning(f"Не удалось удалить предыдущий вебхук: {e}")
-        
-        # Устанавливаем вебхук
-        await bot.set_webhook(url=webhook_url, drop_pending_updates=True)
-        logger.info(f"Вебхук установлен на {webhook_url}")
-        
-        # Проверяем информацию о вебхуке
-        try:
-            webhook_info = await bot.get_webhook_info()
+            # Получаем URL вебхука из запроса или конструируем из заголовка Host
+            webhook_url = request.args.get("url")
+            if not webhook_url:
+                host = request.headers.get("Host")
+                if host:
+                    webhook_url = f"https://{host}/webhook"
+                else:
+                    return jsonify({"error": "Не удалось определить URL для вебхука. Укажите параметр url."}), 400
+            
+            # Удаляем предыдущий вебхук
+            try:
+                await test_bot.delete_webhook(drop_pending_updates=True)
+                logger.info("Предыдущий вебхук удален")
+            except Exception as e:
+                logger.warning(f"Не удалось удалить предыдущий вебхук: {e}")
+            
+            # Устанавливаем вебхук
+            await test_bot.set_webhook(url=webhook_url, drop_pending_updates=True)
+            logger.info(f"Вебхук установлен на {webhook_url}")
+            
+            # Проверяем информацию о вебхуке
+            webhook_info = await test_bot.get_webhook_info()
             logger.info(f"Информация о вебхуке: URL={webhook_info.url}, pending_updates={webhook_info.pending_update_count}")
             
             return jsonify({
@@ -584,23 +726,34 @@ async def set_webhook():
                     "pending_updates": webhook_info.pending_update_count
                 }
             })
-        except Exception as e:
-            logger.warning(f"Не удалось получить информацию о вебхуке: {e}")
-            return jsonify({"status": "ok", "webhook_url": webhook_url})
+        finally:
+            # Закрываем соединение в любом случае
+            await test_bot.session.close()
     except Exception as e:
-        logger.error(f"Ошибка при установке вебхука: {e}")
+        logger.error(f"Ошибка при установке вебхука: {e}", exc_info=True)
         return jsonify({"error": str(e)}), 500
 
 # Маршрут для удаления вебхука
 @app.route("/remove_webhook", methods=["GET"])
 async def remove_webhook():
     try:
-        # Удаляем вебхук
-        await bot.delete_webhook()
-        logger.info("Вебхук удален")
-        return jsonify({"status": "ok"})
+        # Создаем отдельное соединение для этой операции
+        test_bot = Bot(token=TELEGRAM_BOT_TOKEN)
+        
+        try:
+            # Удаляем вебхук
+            await test_bot.delete_webhook(drop_pending_updates=True)
+            logger.info("Вебхук удален")
+            
+            return jsonify({
+                "status": "ok",
+                "timestamp": datetime.datetime.now().isoformat()
+            })
+        finally:
+            # Закрываем соединение в любом случае
+            await test_bot.session.close()
     except Exception as e:
-        logger.error(f"Ошибка при удалении вебхука: {e}")
+        logger.error(f"Ошибка при удалении вебхука: {e}", exc_info=True)
         return jsonify({"error": str(e)}), 500
 
 # Маршрут для запуска задачи генерации аудиокниги
@@ -685,6 +838,178 @@ async def check_status():
         response["error"] = summary_text
     
     return jsonify(response)
+
+# Маршрут для проверки отправки сообщений
+@app.route("/test_message", methods=["GET"])
+async def test_message():
+    try:
+        chat_id = request.args.get("chat_id", ADMIN_CHAT_ID)
+        text = request.args.get("text", "Тестовое сообщение от бота с Vercel!")
+        
+        # Создаем новую сессию для отправки
+        new_bot = Bot(token=TELEGRAM_BOT_TOKEN)
+        
+        # Отправляем сообщение
+        message = await new_bot.send_message(
+            chat_id=chat_id,
+            text=f"{text}\n\nВремя: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+        )
+        
+        # Закрываем сессию
+        await new_bot.session.close()
+        
+        return jsonify({
+            "status": "ok",
+            "message_id": message.message_id,
+            "chat_id": chat_id
+        })
+    except Exception as e:
+        logger.error(f"Ошибка при отправке тестового сообщения: {e}", exc_info=True)
+        return jsonify({"status": "error", "error": str(e)})
+
+# Маршрут для проверки статуса через Telegram API
+@app.route("/telegram_status", methods=["GET"])
+async def telegram_status():
+    try:
+        # Проверяем соединение с Telegram API
+        bot_info = await bot.get_me()
+        webhook_info = await bot.get_webhook_info()
+        
+        # Получаем информацию об обновлениях
+        try:
+            # Создаем обновленное соединение с Telegram
+            new_bot = Bot(token=TELEGRAM_BOT_TOKEN)
+            updates = await new_bot.get_updates(limit=5, timeout=5)
+            updates_info = [
+                {
+                    "update_id": update.update_id,
+                    "type": "message" if update.message else "callback_query" if update.callback_query else "other"
+                }
+                for update in updates
+            ]
+            await new_bot.session.close()
+        except Exception as e:
+            updates_info = {"error": str(e)}
+        
+        # Компонуем результат
+        result = {
+            "bot": {
+                "id": bot_info.id,
+                "name": bot_info.first_name,
+                "username": bot_info.username
+            },
+            "webhook": {
+                "url": webhook_info.url,
+                "pending_updates": webhook_info.pending_update_count,
+                "max_connections": webhook_info.max_connections
+            },
+            "updates": updates_info
+        }
+        
+        # Если вебхук не установлен правильно, предлагаем его установить
+        vercel_url = os.getenv("VERCEL_URL")
+        if vercel_url and (not webhook_info.url or "vercel.app" not in webhook_info.url):
+            result["recommendation"] = "Установите вебхук на корректный URL с помощью /set_webhook"
+        
+        return jsonify(result)
+    except Exception as e:
+        logger.error(f"Ошибка при проверке статуса Telegram: {e}", exc_info=True)
+        return jsonify({"status": "error", "error": str(e)})
+
+# Маршрут для активации и принудительной проверки работы с Telegram API
+@app.route("/activate", methods=["GET"])
+async def activate_bot():
+    try:
+        # Параметры из запроса
+        force_webhook = request.args.get("force_webhook", "false").lower() == "true"
+        force_message = request.args.get("force_message", "false").lower() == "true"
+        chat_id = request.args.get("chat_id", ADMIN_CHAT_ID)
+        
+        # Результат проверки
+        result = {
+            "status": "ok",
+            "timestamp": datetime.datetime.now().isoformat(),
+            "actions": []
+        }
+        
+        # 1. Создаем отдельное соединение с Telegram
+        test_bot = Bot(token=TELEGRAM_BOT_TOKEN)
+        
+        # 2. Проверяем информацию о боте
+        try:
+            bot_info = await test_bot.get_me()
+            result["bot_info"] = {
+                "id": bot_info.id,
+                "name": bot_info.first_name,
+                "username": bot_info.username
+            }
+            result["actions"].append("bot_info_check: success")
+        except Exception as e:
+            result["bot_info_error"] = str(e)
+            result["actions"].append("bot_info_check: failed")
+        
+        # 3. Проверяем вебхук
+        try:
+            webhook_info = await test_bot.get_webhook_info()
+            result["webhook"] = {
+                "url": webhook_info.url,
+                "pending_updates": webhook_info.pending_update_count,
+                "max_connections": webhook_info.max_connections
+            }
+            result["actions"].append("webhook_check: success")
+            
+            # Если нужно обновить вебхук принудительно
+            if force_webhook:
+                vercel_url = os.getenv("VERCEL_URL")
+                if vercel_url:
+                    webhook_url = f"https://{vercel_url}/webhook"
+                    # Удаляем старый вебхук
+                    await test_bot.delete_webhook(drop_pending_updates=True)
+                    # Устанавливаем новый
+                    await test_bot.set_webhook(url=webhook_url, drop_pending_updates=True, max_connections=5)
+                    # Проверяем результат
+                    new_webhook_info = await test_bot.get_webhook_info()
+                    result["webhook_update"] = {
+                        "old_url": webhook_info.url,
+                        "new_url": new_webhook_info.url,
+                        "success": new_webhook_info.url == webhook_url
+                    }
+                    result["actions"].append("webhook_update: success")
+                else:
+                    result["webhook_update"] = {"error": "VERCEL_URL not set"}
+                    result["actions"].append("webhook_update: failed")
+        except Exception as e:
+            result["webhook_error"] = str(e)
+            result["actions"].append("webhook_check: failed")
+        
+        # 4. Отправляем тестовое сообщение, если запрошено
+        if force_message:
+            try:
+                message = await test_bot.send_message(
+                    chat_id=chat_id,
+                    text=f"🔄 Активация бота на Vercel!\n\nВремя: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\nStatus: {result['status']}"
+                )
+                result["message"] = {
+                    "chat_id": chat_id,
+                    "message_id": message.message_id,
+                    "success": True
+                }
+                result["actions"].append("message_send: success")
+            except Exception as e:
+                result["message_error"] = str(e)
+                result["actions"].append("message_send: failed")
+        
+        # 5. Закрываем соединение
+        await test_bot.session.close()
+        
+        return jsonify(result)
+    except Exception as e:
+        logger.error(f"Ошибка при активации бота: {e}", exc_info=True)
+        return jsonify({
+            "status": "error",
+            "error": str(e),
+            "timestamp": datetime.datetime.now().isoformat()
+        })
 
 # Основная функция для запуска приложения
 if __name__ == "__main__":
