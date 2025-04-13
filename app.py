@@ -114,7 +114,7 @@ async def generate_audio(text, model="en-US-GuyNeural"):
     return audio_content
 
 # Асинхронная функция для генерации аудиокниги
-@app.route(f"/{TELEGRAM_TOKEN}", methods=["POST"])
+@app.route(f"/{TELEGRAM_BOT_TOKEN}", methods=["POST"])
 async def webhook():
     try:
         update = types.Update(**(await request.get_json()))
