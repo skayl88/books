@@ -1,6 +1,6 @@
 aiogram
 aiogram.utils
-aiohttp
+aiohttp==3.9.1
 pydantic
 requests
 sqlalchemy
