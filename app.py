@@ -115,31 +115,45 @@ async def generate_audio(text, model="en-US-GuyNeural"):
 # Асинхронная функция для генерации аудиокниги
 async def generate_audio_book_async(task_id, query, use_mock=False):
     try:
-        # Чтение системного сообщения
-        with open('system_message.txt', 'r', encoding='utf-8') as file:
-            system_message = file.read()
-
-        if use_mock:
-            logging.debug("Используем локальный файл вместо запроса к API.")
-            try:
-                # Непосредственно читаем файл mock_response.json
-                with open("mock_response.json", "r", encoding='utf-8') as f:
-                    raw_content = f.read()
-                
-                logging.debug("Пытаемся распарсить mock_response.json с помощью safe_json_loads")
-                
-                # Используем безопасный парсер вместо обычной очистки и json.loads
-                response_data = safe_json_loads(raw_content)
-                logging.debug("Данные из mock_response.json успешно загружены")
-                
-            except json.JSONDecodeError as e:
-                logging.error(f"Ошибка при парсинге JSON: {str(e)}")
-                raise
-            except Exception as e:
-                logging.error(f"Ошибка при чтении файла mock_response.json: {str(e)}")
-                raise
-        else:
-                # Вызов API Anthropic
+        # Обновляем статус в базе данных на "processing"
+        db_cursor.execute("""
+            UPDATE books 
+            SET status = 'processing' 
+            WHERE query = %s
+        """, (query,))
+        db_connection.commit()
+        
+        # Отправляем уведомление о начале обработки
+        await bot.send_message(ADMIN_CHAT_ID, f"Начата обработка аудиокниги для запроса: '{query}'")
+        
+        # Короткий таймаут для серверлесс функций
+        # В реальной ситуации нужно разделить процесс на несколько вызовов API
+        try:
+            # Чтение системного сообщения
+            with open('system_message.txt', 'r', encoding='utf-8') as file:
+                system_message = file.read()
+    
+            if use_mock:
+                logging.debug("Используем локальный файл вместо запроса к API.")
+                try:
+                    # Непосредственно читаем файл mock_response.json
+                    with open("mock_response.json", "r", encoding='utf-8') as f:
+                        raw_content = f.read()
+                    
+                    logging.debug("Пытаемся распарсить mock_response.json с помощью safe_json_loads")
+                    
+                    # Используем безопасный парсер вместо обычной очистки и json.loads
+                    response_data = safe_json_loads(raw_content)
+                    logging.debug("Данные из mock_response.json успешно загружены")
+                    
+                except json.JSONDecodeError as e:
+                    logging.error(f"Ошибка при парсинге JSON: {str(e)}")
+                    raise
+                except Exception as e:
+                    logging.error(f"Ошибка при чтении файла mock_response.json: {str(e)}")
+                    raise
+            else:
+                # Вызов API Anthropic с коротким таймаутом
                 query_content = f"Please summarize the following query: {query}."
                 message = await asyncio.wait_for(
                     asyncio.to_thread(
@@ -151,7 +165,7 @@ async def generate_audio_book_async(task_id, query, use_mock=False):
                         system=system_message,
                         messages=[{"role": "user", "content": query_content}]
                     ),
-                    timeout=60  # 1 минута
+                    timeout=25  # Уменьшаем таймаут для serverless функций
                 )
                 logging.debug(f"Received response from Anthropic API: {message}")
                 
@@ -160,71 +174,81 @@ async def generate_audio_book_async(task_id, query, use_mock=False):
                 if raw_text is None:
                     raise ValueError(f"Ответ от API для запроса '{query}' не содержит текста.")
                 
-                # Записываем исходный ответ в файл для отладки
-                response_filename = f"response_{task_id}.txt"
-                with open(response_filename, "w", encoding="utf-8") as f:
-                    f.write(f"ЗАПРОС: {query}\n\n")
-                    f.write(f"ОТВЕТ API:\n{raw_text}")
-                logging.info(f"Ответ API сохранен в файл {response_filename}")
-                
-                logging.debug(f"Получен текст длиной {len(raw_text)} символов")
-                
                 try:
                     # Используем безопасный парсер JSON
                     response_data = safe_json_loads(raw_text)
                     logging.debug("JSON успешно распарсен с помощью safe_json_loads")
-                    
-                    # # Записываем распарсенный JSON в файл для отладки
-                    # parsed_filename = f"parsed_{task_id}.json"
-                    # with open(parsed_filename, "w", encoding="utf-8") as f:
-                    #     json.dump(response_data, f, ensure_ascii=False, indent=2)
-                    # logging.info(f"Распарсенный JSON сохранен в файл {parsed_filename}")
                 
                 except Exception as e:
                     logging.error(f"Не удалось распарсить ответ от Anthropic API: {e}")
-                    logging.error(f"Полный ответ API сохранен в {response_filename}")
                     raise ValueError(f"Не удалось обработать ответ API: {e}")
-
-        if not response_data.get('summary_possible', False):
-            error_message = response_data.get('summary_text', 'Не удалось сгенерировать резюме.')
-            logging.error(f"Ошибка при обработке запроса '{query}': {error_message}")
+    
+            if not response_data.get('summary_possible', False):
+                error_message = response_data.get('summary_text', 'Не удалось сгенерировать резюме.')
+                logging.error(f"Ошибка при обработке запроса '{query}': {error_message}")
+                
+                # Обновляем статус в базе данных
+                db_cursor.execute("""
+                    UPDATE books 
+                    SET status = 'failed', summary_text = %s 
+                    WHERE query = %s
+                """, (error_message, query))
+                db_connection.commit()
+                
+                await bot.send_message(ADMIN_CHAT_ID, f"Не удалось создать аудиокнигу для запроса '{query}': {error_message}")
+                return
+    
+            summary_text = response_data.get('summary_text')
+            title = response_data.get('title')
+            author = response_data.get('author')
             
-            # Обновляем статус в базе данных
+            # Сохраняем полученные данные
             db_cursor.execute("""
                 UPDATE books 
-                SET status = 'failed', summary_text = %s 
+                SET status = 'summary_ready', 
+                    summary_text = %s,
+                    title = %s,
+                    author = %s
                 WHERE query = %s
-            """, (error_message, query))
+            """, (summary_text, title, author, query))
             db_connection.commit()
-            return
-
-        summary_text = response_data.get('summary_text')
-        title = response_data.get('title')
-        author = response_data.get('author')
+            
+            # Отправляем промежуточное уведомление
+            await bot.send_message(ADMIN_CHAT_ID, f"Получены данные для аудиокниги:\nНазвание: {title}\nАвтор: {author}\nНачинаю генерацию аудио...")
+            
+            # В реальном сценарии здесь нужно было бы использовать очередь задач или отдельный API endpoint 
+            # для генерации аудио, так как serverless функции имеют ограничение по времени выполнения
+            
+            # Генерируем аудио из текста
+            audio_content = await generate_audio(summary_text)
+            
+            # Загружаем аудио в Vercel Blob Storage
+            file_path = f"audiobooks/{task_id}.mp3"
+            file_url = await upload_to_vercel_blob(file_path, audio_content)
+    
+            # Обновляем запись в базе данных
+            db_cursor.execute("""
+                UPDATE books 
+                SET status = 'completed', 
+                    file_url = %s
+                WHERE query = %s
+            """, (file_url, query))
+            db_connection.commit()
+    
+            # Отправляем уведомление пользователю через бота
+            await bot.send_message(ADMIN_CHAT_ID, f"Аудиокнига готова!\nНазвание: {title}\nАвтор: {author}\nURL: {file_url}")
         
-        logging.info(f"Сводка: {summary_text[:100]}..., Название: {title}, Автор: {author}")
-
-        # Генерируем аудио из текста
-        audio_content = await generate_audio(summary_text)
-        
-        # Загружаем аудио в Vercel Blob Storage
-        file_path = f"audiobooks/{task_id}.mp3"
-        file_url = await upload_to_vercel_blob(file_path, audio_content)
-
-        # Обновляем запись в базе данных
-        db_cursor.execute("""
-            UPDATE books 
-            SET status = 'completed', 
-                file_url = %s, 
-                summary_text = %s,
-                title = %s,
-                author = %s
-            WHERE query = %s
-        """, (file_url, summary_text, title, author, query))
-        db_connection.commit()
-
-        # Отправляем уведомление пользователю через бота
-        await bot.send_message(ADMIN_CHAT_ID, f"Аудиокнига готова!\nНазвание: {title}\nАвтор: {author}\nURL: {file_url}")
+        except asyncio.TimeoutError:
+            # Если процесс слишком долгий для serverless функции,
+            # сохраняем статус и оставляем задачу для другого запроса
+            db_cursor.execute("""
+                UPDATE books 
+                SET status = 'processing_timeout'
+                WHERE query = %s
+            """, (query,))
+            db_connection.commit()
+            
+            await bot.send_message(ADMIN_CHAT_ID, f"Обработка запроса '{query}' занимает больше времени, чем ожидалось. Пожалуйста, проверьте статус позже.")
 
     except Exception as e:
         error_message = str(e)
@@ -361,15 +385,65 @@ def safe_json_loads(json_str):
 # Маршрут для webhook от Telegram
 @app.route(WEBHOOK_PATH, methods=["POST"])
 async def webhook():
-    # Получаем обновление от Telegram
-    data = await request.json
-    # Логируем полученное обновление
-    logger.info(f"Получен webhook от Telegram: {data}")
-    
-    # Обрабатываем обновление через диспетчер бота
-    await dp.feed_webhook_update(bot, data)
-    
-    return "", 200
+    try:
+        # Получаем обновление от Telegram
+        data = await request.get_json()
+        # Логируем полученное обновление
+        logger.info(f"Получен webhook от Telegram: {data}")
+        
+        # Создаем новый цикл событий для этого запроса
+        asyncio.set_event_loop(asyncio.new_event_loop())
+        
+        # Ручная обработка обновления вместо использования диспетчера
+        update_type = None
+        
+        # Проверяем тип обновления
+        if 'message' in data:
+            update_type = 'message'
+            message = data['message']
+            chat_id = message['chat']['id']
+            
+            # Обработка команд
+            if 'text' in message:
+                text = message['text']
+                if text.startswith('/start') or text.startswith('/help'):
+                    await bot.send_message(chat_id, "Привет! Отправь мне название книги, и я создам аудиокнигу.")
+                else:
+                    # Обработка обычного сообщения (запрос книги)
+                    query = text.strip()
+                    
+                    # Проверяем базу данных
+                    db_cursor.execute("SELECT file_url, status FROM books WHERE query = %s", (query,))
+                    result = db_cursor.fetchone()
+                    
+                    if result:
+                        file_url, status = result
+                        if status == "completed":
+                            await bot.send_message(chat_id, f"Ваша аудиокнига готова: {file_url}")
+                        elif status == "pending":
+                            await bot.send_message(chat_id, "Ваша задача ещё в процессе. Пожалуйста, подождите.")
+                    else:
+                        # Генерация уникального task_id
+                        task_id = str(uuid4())
+                        
+                        # Сохранение задачи в базу данных
+                        db_cursor.execute(""" 
+                        INSERT INTO books (query, status) 
+                        VALUES (%s, %s) 
+                        ON CONFLICT (query) DO UPDATE SET 
+                            status = EXCLUDED.status;
+                        """, (query, "pending"))
+                        db_connection.commit()
+                        
+                        # Запуск фоновой задачи
+                        asyncio.create_task(generate_audio_book_async(task_id, query))
+                        
+                        await bot.send_message(chat_id, f"Запрос принят! ID задачи: {task_id}. Проверяйте статус позже.")
+        
+        return "", 200
+    except Exception as e:
+        logger.error(f"Ошибка при обработке webhook: {str(e)}", exc_info=True)
+        return "", 500
 
 # Запуск асинхронных задач при запуске приложения
 @app.before_serving
@@ -477,6 +551,48 @@ async def check_status():
         response["error"] = summary_text
     
     return jsonify(response)
+
+# Маршрут для продолжения обработки задач, которые были прерваны из-за timeout
+@app.route("/continue-processing", methods=["POST"])
+async def continue_processing():
+    try:
+        data = await request.get_json()
+        query = data.get("query")
+        
+        if not query:
+            return jsonify({"error": "Missing query parameter"}), 400
+        
+        # Проверяем статус задачи
+        db_cursor.execute("SELECT status FROM books WHERE query = %s", (query,))
+        result = db_cursor.fetchone()
+        
+        if not result:
+            return jsonify({"status": "not_found", "message": "Задача не найдена"}), 404
+        
+        status = result[0]
+        
+        if status == 'completed':
+            return jsonify({"status": "completed", "message": "Задача уже выполнена"}), 200
+        
+        if status not in ['processing_timeout', 'pending', 'processing', 'summary_ready']:
+            return jsonify({"status": status, "message": f"Задача в статусе {status} не может быть продолжена"}), 400
+        
+        # Создаем новый task_id для продолжения обработки
+        task_id = str(uuid4())
+        
+        # Запускаем обработку в фоновом режиме
+        asyncio.create_task(generate_audio_book_async(task_id, query))
+        
+        return jsonify({
+            "status": "processing",
+            "task_id": task_id,
+            "message": "Задача на генерацию аудиокниги продолжена"
+        })
+        
+    except Exception as e:
+        error_message = str(e)
+        logging.error(f"Ошибка при продолжении обработки: {error_message}")
+        return jsonify({"error": error_message}), 500
 
 # Основная функция для запуска приложения
 if __name__ == "__main__":
