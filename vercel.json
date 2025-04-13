@@ -12,6 +12,13 @@
   ],
   "routes": [
     {
+      "src": "/webhook",
+      "dest": "app.py",
+      "methods": [
+        "POST"
+      ]
+    },
+    {
       "src": "/(.*)",
       "dest": "app.py"
     }

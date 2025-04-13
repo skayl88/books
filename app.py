@@ -11,9 +11,10 @@ from edge_tts import Communicate
 import anthropic
 from dotenv import load_dotenv
 from uuid import uuid4
-from aiogram import Bot, Dispatcher, types
+from aiogram import Bot, Dispatcher, types, F
 from aiogram.enums import ParseMode
 from aiogram.filters import Command
+from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
 from httpx import Timeout
 import re, json
 # Загружаем переменные окружения из .env файла
@@ -26,6 +27,11 @@ logging.basicConfig(
     handlers=[logging.StreamHandler()]
 )
 logger = logging.getLogger(__name__)
+
+# Получаем переменные окружения
+BASE_URL = os.getenv("BASE_URL")
+WEBHOOK_PATH = "/webhook"
+WEBHOOK_URL = f"{BASE_URL}{WEBHOOK_PATH}"
 
 # Инициализация Quart
 app = Quart(__name__)
@@ -352,12 +358,28 @@ def safe_json_loads(json_str):
         # Если не удалось извлечь данные, выбрасываем исключение
         raise ValueError("Не удалось распарсить JSON и извлечь необходимые данные")
 
+# Маршрут для webhook от Telegram
+@app.route(WEBHOOK_PATH, methods=["POST"])
+async def webhook():
+    # Получаем обновление от Telegram
+    data = await request.json
+    # Логируем полученное обновление
+    logger.info(f"Получен webhook от Telegram: {data}")
+    
+    # Обрабатываем обновление через диспетчер бота
+    await dp.feed_webhook_update(bot, data)
+    
+    return "", 200
+
 # Запуск асинхронных задач при запуске приложения
 @app.before_serving
 async def startup():
-    # Подключаем диспетчер к боту и запускаем поллинг
-    await dp.start_polling(bot)
-    logger.info("Telegram bot started")
+    # Устанавливаем webhook для бота
+    webhook_info = await bot.get_webhook_info()
+    if webhook_info.url != WEBHOOK_URL:
+        logger.info(f"Устанавливаем webhook на URL: {WEBHOOK_URL}")
+        await bot.set_webhook(url=WEBHOOK_URL, drop_pending_updates=True)
+    logger.info("Telegram bot webhook настроен")
 
 # Завершение работы приложения
 @app.after_serving
@@ -366,9 +388,7 @@ async def shutdown():
     session = await bot.get_session()
     if session:
         await session.close()
-    # Останавливаем диспетчер
-    await dp.stop_polling()
-    logger.info("Telegram bot stopped")
+    logger.info("Telegram bot сессия закрыта")
 
 # Маршрут Quart для проверки работоспособности
 @app.route("/")
