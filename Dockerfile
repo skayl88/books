@@ -22,10 +22,10 @@ RUN pip install --no-cache-dir --no-build-isolation -r requirements.txt
 COPY . .
 
 # Экспортируем переменные среды для конфигурации
-ENV PORT=5000
+ENV PORT=8443
 
 # Открываем порт для приложения
-EXPOSE 5000
+EXPOSE 8443
 
 # Команда запуска приложения
 CMD ["python", "app.py"]
